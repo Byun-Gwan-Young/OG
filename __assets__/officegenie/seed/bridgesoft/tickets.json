@@ -1,0 +1,150 @@
+{
+  "company_id": "bridgesoft",
+  "company_name": "(주)브릿지소프트",
+  "data_version": "demo-1.5",
+  "ticket_id_format": "REQ-{sequence:03d}",
+  "next_sequence": 4,
+  "status_values": [
+    "접수완료",
+    "검토중",
+    "승인",
+    "반려",
+    "지급완료"
+  ],
+  "tickets": [
+    {
+      "ticket_id": "REQ-001",
+      "employee_id": "EMP001",
+      "type": "비품",
+      "item": "노트북",
+      "quantity": 1,
+      "purpose": "신입 입사 기본 장비",
+      "status": "지급완료",
+      "created_at": "2026-11-17T09:00:00+09:00"
+    },
+    {
+      "ticket_id": "REQ-002",
+      "employee_id": "EMP001",
+      "type": "계정",
+      "item": "GitHub 계정",
+      "quantity": 1,
+      "purpose": "백엔드 저장소 접근",
+      "status": "승인",
+      "created_at": "2026-11-18T10:30:00+09:00"
+    },
+    {
+      "ticket_id": "REQ-003",
+      "employee_id": "EMP001",
+      "type": "비품",
+      "item": "마우스",
+      "quantity": 1,
+      "purpose": "개발 업무용",
+      "status": "접수완료",
+      "created_at": "2026-11-19T13:15:00+09:00"
+    }
+  ],
+  "creation_rule": {
+    "user_confirmation_required": true,
+    "authorized_employee_from_session": true,
+    "initial_status": "접수완료",
+    "id_must_be_unique": true,
+    "persist_to_json": true,
+    "prevent_rapid_duplicate_submission": true,
+    "equipment_whitelist_only": true,
+    "allowed_equipment_source": "allowed_equipment (policies.json 비품관리 규정 제1조·제3조 기준)",
+    "normalize_item_aliases": true,
+    "unknown_equipment_action": "reject_without_ticket",
+    "unknown_equipment_message": "신청할 수 없는 품목입니다. 해당 품목은 사내 비품 규정에 등록되어 있지 않아 접수되지 않습니다.",
+    "excess_quantity_action": "reject_without_ticket",
+    "excess_quantity_message": "비품 신청 가능 수량을 초과했습니다. 사내 비품관리 규정의 지급 한도를 확인해 주세요.",
+    "check_existing_equipment_and_pending_tickets": true,
+    "check_quantity_only_when_policy_limit_defined": true,
+    "account_requests_follow_separate_policy": true,
+    "do_not_mutate_tickets_or_next_sequence_on_rejection": true,
+    "validate_in_mcp_server_before_creating_ticket": true
+  },
+  "demo_expected_new_ticket": {
+    "ticket_id": "REQ-004",
+    "employee_id": "EMP001",
+    "item": "노트북 거치대",
+    "quantity": 1,
+    "status": "접수완료",
+    "note": "테스트 시 서버가 생성해야 할 티켓 예시. 초기 tickets 배열에는 미리 넣지 않음"
+  },
+  "allowed_equipment": [
+    {
+      "item": "노트북",
+      "aliases": [
+        "업무용 노트북"
+      ],
+      "max_quantity_per_employee": 1,
+      "policy_reference": "BS-105 / BS-107",
+      "quantity_limit_defined": true
+    },
+    {
+      "item": "모니터",
+      "aliases": [
+        "외부 모니터",
+        "듀얼 모니터"
+      ],
+      "max_quantity_per_employee": 2,
+      "policy_reference": "BS-105 / BS-107",
+      "quantity_limit_defined": true
+    },
+    {
+      "item": "노트북 거치대",
+      "aliases": [
+        "거치대",
+        "랩탑 거치대"
+      ],
+      "max_quantity_per_employee": 1,
+      "policy_reference": "BS-105 / BS-107",
+      "quantity_limit_defined": true
+    },
+    {
+      "item": "키보드",
+      "aliases": [
+        "무선 키보드",
+        "유선 키보드"
+      ],
+      "max_quantity_per_employee": 1,
+      "policy_reference": "BS-105 / BS-107",
+      "quantity_limit_defined": true
+    },
+    {
+      "item": "마우스",
+      "aliases": [
+        "무선 마우스",
+        "유선 마우스"
+      ],
+      "max_quantity_per_employee": 1,
+      "policy_reference": "BS-105 / BS-107",
+      "quantity_limit_defined": true
+    },
+    {
+      "item": "헤드셋",
+      "aliases": [
+        "업무용 헤드셋"
+      ],
+      "max_quantity_per_employee": null,
+      "policy_reference": "BS-105",
+      "quantity_limit_defined": false
+    }
+  ],
+  "demo_rejection_examples": [
+    {
+      "item": "업무용 태블릿",
+      "quantity": 1,
+      "accepted": false,
+      "ticket_created": false,
+      "next_sequence_unchanged": true
+    },
+    {
+      "item": "게임기",
+      "quantity": 1,
+      "accepted": false,
+      "ticket_created": false,
+      "next_sequence_unchanged": true
+    }
+  ]
+}

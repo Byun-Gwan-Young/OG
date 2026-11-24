@@ -1,0 +1,361 @@
+{
+  "company_id": "nextwave",
+  "company_name": "(주)넥스트웨이브",
+  "data_version": "demo-1.1",
+  "buildings": [
+    {
+      "name": "스마트타워",
+      "total_floors": 6,
+      "floors": [
+        {
+          "floor": 1,
+          "location_ids": [
+            "LOC-001",
+            "LOC-002"
+          ]
+        },
+        {
+          "floor": 2,
+          "location_ids": [
+            "LOC-003",
+            "LOC-004",
+            "LOC-005"
+          ]
+        },
+        {
+          "floor": 3,
+          "location_ids": [
+            "LOC-006",
+            "LOC-007",
+            "LOC-008"
+          ]
+        },
+        {
+          "floor": 4,
+          "location_ids": [
+            "LOC-009",
+            "LOC-010"
+          ]
+        },
+        {
+          "floor": 5,
+          "location_ids": [
+            "LOC-011",
+            "LOC-012"
+          ]
+        },
+        {
+          "floor": 6,
+          "location_ids": [
+            "LOC-013",
+            "LOC-014"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "연구동",
+      "total_floors": 3,
+      "floors": [
+        {
+          "floor": 1,
+          "location_ids": [
+            "LOC-015",
+            "LOC-016"
+          ]
+        },
+        {
+          "floor": 2,
+          "location_ids": [
+            "LOC-017",
+            "LOC-018"
+          ]
+        },
+        {
+          "floor": 3,
+          "location_ids": [
+            "LOC-019",
+            "LOC-020"
+          ]
+        }
+      ]
+    }
+  ],
+  "locations": [
+    {
+      "location_id": "LOC-001",
+      "name": "웰컴데스크",
+      "aliases": [
+        "안내데스크",
+        "방문객 접수"
+      ],
+      "building": "스마트타워",
+      "floor": 1,
+      "zone": "로비 A구역",
+      "guide": "스마트타워 1층 로비 A구역입니다. 방문객과 신규 입사자를 안내합니다.",
+      "access": "전 직원 및 방문객"
+    },
+    {
+      "location_id": "LOC-002",
+      "name": "카페 라운지",
+      "aliases": [
+        "카페",
+        "라운지"
+      ],
+      "building": "스마트타워",
+      "floor": 1,
+      "zone": "로비 B구역",
+      "guide": "스마트타워 1층 로비 B구역에 있습니다.",
+      "access": "전 직원 및 방문객",
+      "capacity": 20
+    },
+    {
+      "location_id": "LOC-003",
+      "name": "인사총무팀",
+      "aliases": [
+        "HR",
+        "인사팀",
+        "총무팀"
+      ],
+      "building": "스마트타워",
+      "floor": 2,
+      "zone": "동측 A구역",
+      "guide": "스마트타워 2층 동측 A구역입니다.",
+      "access": "전 직원"
+    },
+    {
+      "location_id": "LOC-004",
+      "name": "재무회계팀",
+      "aliases": [
+        "재무팀",
+        "회계팀"
+      ],
+      "building": "스마트타워",
+      "floor": 2,
+      "zone": "서측 B구역",
+      "guide": "스마트타워 2층 서측 B구역에 있습니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-005",
+      "name": "복합기",
+      "aliases": [
+        "프린터",
+        "인쇄기",
+        "출력실"
+      ],
+      "building": "스마트타워",
+      "floor": 2,
+      "zone": "중앙 C구역",
+      "guide": "스마트타워 2층 중앙 C구역 공용 복합기 공간입니다.",
+      "access": "전 직원"
+    },
+    {
+      "location_id": "LOC-006",
+      "name": "서비스기획팀",
+      "aliases": [
+        "기획팀",
+        "PM팀"
+      ],
+      "building": "스마트타워",
+      "floor": 3,
+      "zone": "동측 A구역",
+      "guide": "스마트타워 3층 동측 A구역에 있습니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-007",
+      "name": "디자인팀",
+      "aliases": [
+        "디자인실",
+        "UIUX팀"
+      ],
+      "building": "스마트타워",
+      "floor": 3,
+      "zone": "서측 B구역",
+      "guide": "스마트타워 3층 서측 B구역에 있습니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-008",
+      "name": "브레인스토밍룸",
+      "aliases": [
+        "아이디어 회의실",
+        "기획 회의실"
+      ],
+      "building": "스마트타워",
+      "floor": 3,
+      "zone": "중앙 C구역",
+      "guide": "스마트타워 3층 중앙 C구역이며 최대 6명 이용 가능합니다.",
+      "access": "전 직원",
+      "capacity": 6
+    },
+    {
+      "location_id": "LOC-009",
+      "name": "프론트엔드개발팀",
+      "aliases": [
+        "프론트엔드팀",
+        "웹개발팀"
+      ],
+      "building": "스마트타워",
+      "floor": 4,
+      "zone": "동측 A구역",
+      "guide": "스마트타워 4층 동측 A구역에 있습니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-010",
+      "name": "중회의실",
+      "aliases": [
+        "회의실 B",
+        "중간 회의실"
+      ],
+      "building": "스마트타워",
+      "floor": 4,
+      "zone": "서측 B구역",
+      "guide": "스마트타워 4층 서측 B구역이며 최대 8명 이용 가능합니다.",
+      "access": "전 직원",
+      "capacity": 8
+    },
+    {
+      "location_id": "LOC-011",
+      "name": "백엔드개발팀",
+      "aliases": [
+        "백엔드팀",
+        "서버팀"
+      ],
+      "building": "스마트타워",
+      "floor": 5,
+      "zone": "동측 A구역",
+      "guide": "스마트타워 5층 동측 A구역에 있습니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-012",
+      "name": "협업 부스",
+      "aliases": [
+        "집중 협업실",
+        "프로젝트 부스"
+      ],
+      "building": "스마트타워",
+      "floor": 5,
+      "zone": "서측 B구역",
+      "guide": "스마트타워 5층 서측 B구역이며 최대 4명 이용 가능합니다.",
+      "access": "전 직원",
+      "capacity": 4
+    },
+    {
+      "location_id": "LOC-013",
+      "name": "대회의실",
+      "aliases": [
+        "큰 회의실",
+        "회의실 A",
+        "대형 회의실"
+      ],
+      "building": "스마트타워",
+      "floor": 6,
+      "zone": "서측 B구역",
+      "guide": "스마트타워 6층 서측 B구역에 있으며 최대 16명 이용 가능합니다.",
+      "access": "전 직원",
+      "capacity": 16
+    },
+    {
+      "location_id": "LOC-014",
+      "name": "전사 행사홀",
+      "aliases": [
+        "타운홀",
+        "행사장"
+      ],
+      "building": "스마트타워",
+      "floor": 6,
+      "zone": "동측 A구역",
+      "guide": "스마트타워 6층 동측 A구역이며 전사 행사와 발표에 활용합니다.",
+      "access": "전 직원",
+      "capacity": 45
+    },
+    {
+      "location_id": "LOC-015",
+      "name": "장비 수령실",
+      "aliases": [
+        "비품 창고",
+        "장비 보관실"
+      ],
+      "building": "연구동",
+      "floor": 1,
+      "zone": "A구역",
+      "guide": "연구동 1층 A구역입니다. 지급 승인된 비품을 수령합니다.",
+      "access": "담당 직원 및 승인된 수령자"
+    },
+    {
+      "location_id": "LOC-016",
+      "name": "직원 휴게실",
+      "aliases": [
+        "휴게실",
+        "탕비실"
+      ],
+      "building": "연구동",
+      "floor": 1,
+      "zone": "B구역",
+      "guide": "연구동 1층 B구역입니다.",
+      "access": "전 직원"
+    },
+    {
+      "location_id": "LOC-017",
+      "name": "QA팀",
+      "aliases": [
+        "QA",
+        "테스트팀"
+      ],
+      "building": "연구동",
+      "floor": 2,
+      "zone": "A구역",
+      "guide": "연구동 2층 A구역에 있습니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-018",
+      "name": "테스트 랩",
+      "aliases": [
+        "QA 실험실",
+        "테스트실"
+      ],
+      "building": "연구동",
+      "floor": 2,
+      "zone": "B구역",
+      "guide": "연구동 2층 B구역입니다. 테스트 장비 사용은 사전 승인이 필요합니다.",
+      "access": "담당 직원만"
+    },
+    {
+      "location_id": "LOC-019",
+      "name": "교육실",
+      "aliases": [
+        "온보딩 교육실",
+        "신입 교육실"
+      ],
+      "building": "연구동",
+      "floor": 3,
+      "zone": "A구역",
+      "guide": "연구동 3층 A구역에 있으며 최대 20명 이용 가능합니다.",
+      "access": "전 직원",
+      "capacity": 20
+    },
+    {
+      "location_id": "LOC-020",
+      "name": "영상회의실",
+      "aliases": [
+        "화상회의실",
+        "원격회의실"
+      ],
+      "building": "연구동",
+      "floor": 3,
+      "zone": "B구역",
+      "guide": "연구동 3층 B구역이며 최대 6명 이용 가능합니다.",
+      "access": "전 직원",
+      "capacity": 6
+    }
+  ],
+  "explicitly_not_registered": [
+    "사내 수면실",
+    "대표님 개인 연락처"
+  ]
+}
