@@ -1,5 +1,5 @@
 """
-오피스지니 에이전트: Gemini + MCP(stdio) 연결 모듈
+오피스지니 에이전트: Jitda LLM API + MCP(stdio) 연결 모듈
 ==================================================
 
 app.py(Streamlit)는 이 파일의 두 클래스만 사용한다.
@@ -26,21 +26,26 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import copy
+import json
 import logging
 import os
 import re
 import sys
 import threading
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastmcp import Client
 from fastmcp.client.transports import PythonStdioTransport
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_MODEL = os.environ.get("OFFICEGENIE_MODEL", "gemini-3.6-flash")
+DEFAULT_MODEL = "jitda-chat"
 THINKING_LEVEL = os.environ.get(
     "OFFICEGENIE_THINKING_LEVEL", "low"
 )  # low | medium | high
@@ -49,6 +54,112 @@ MAX_TOOL_ROUNDS = 6
 KST = timezone(timedelta(hours=9))
 LLM_TIMEOUT_SEC = int(os.environ.get("OFFICEGENIE_LLM_TIMEOUT", "30"))
 log = logging.getLogger("officegenie")
+
+
+class LLMAPIError(RuntimeError):
+    """Safe, credential-redacted error returned by the configured LLM API."""
+
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        super().__init__(f"HTTP {status_code}: {message}")
+
+
+def _redact_api_secret(text: str, secret: str | None) -> str:
+    if secret:
+        text = text.replace(secret, "[REDACTED]")
+    text = re.sub(
+        r"(?i)(authorization|api[_ -]?key|x-api-key|x-goog-api-key)(\s*[:=]\s*)(?:bearer\s+)?([^\s,;\"']+)",
+        r"\1\2[REDACTED]",
+        text,
+    )
+    text = re.sub(r"(?i)bearer\s+[^\s,;\"']+", "Bearer [REDACTED]", text)
+    text = re.sub(r"\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED]", text)
+    return " ".join(text.split())[:500]
+
+
+def _provider_error_message(response_body: bytes, secret: str | None) -> str:
+    message = "Request failed."
+    try:
+        body = json.loads(response_body.decode("utf-8"))
+        error = body.get("error") if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("code") or message)
+        elif isinstance(error, str):
+            message = error
+        elif isinstance(body, dict) and body.get("message"):
+            message = str(body["message"])
+        elif response_body:
+            message = response_body.decode("utf-8", errors="replace")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        if response_body:
+            message = response_body.decode("utf-8", errors="replace")
+    return _redact_api_secret(message, secret)
+
+
+def _openai_messages(contents: list, system: str) -> list[dict]:
+    """Convert the existing Gemini-style session history to OpenAI chat messages."""
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+
+    for content in contents:
+        role = "assistant" if getattr(content, "role", "user") == "model" else "user"
+        text_parts: list[str] = []
+        tool_calls: list[dict] = []
+        tool_responses: list[dict] = []
+
+        for part in getattr(content, "parts", []) or []:
+            text = getattr(part, "text", None)
+            if text:
+                text_parts.append(str(text))
+
+            function_call = getattr(part, "function_call", None)
+            if function_call:
+                args = getattr(function_call, "args", None) or {}
+                call_id = (
+                    getattr(function_call, "id", None) or f"call_{len(tool_calls)}"
+                )
+                tool_calls.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": getattr(function_call, "name", ""),
+                            "arguments": json.dumps(dict(args), ensure_ascii=False),
+                        },
+                    }
+                )
+
+            function_response = getattr(part, "function_response", None)
+            if function_response:
+                response_data = getattr(function_response, "response", None) or {}
+                tool_responses.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": getattr(function_response, "id", None) or "",
+                        "name": getattr(function_response, "name", None) or "",
+                        "content": json.dumps(
+                            response_data, ensure_ascii=False, default=str
+                        ),
+                    }
+                )
+
+        if role == "assistant":
+            message: dict = {
+                "role": "assistant",
+                "content": "\n".join(text_parts) or None,
+            }
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+            if message["content"] is not None or tool_calls:
+                messages.append(message)
+        else:
+            if text_parts:
+                messages.append({"role": "user", "content": "\n".join(text_parts)})
+            messages.extend(tool_responses)
+
+    return messages
+
 
 LLM_TOOLS = {
     "search_policy",
@@ -151,20 +262,27 @@ class OfficeGenieAgent:
         server_path: str | Path = BASE_DIR / "mcp_server.py",
         model: str = DEFAULT_MODEL,
         api_key: str | None = None,
+        base_url: str | None = None,
         data_root: str | Path | None = None,
         llm: Any = None,
     ):
         self.server_path = Path(server_path)
         self.model = model
         self._env = dict(os.environ)
+        # LLM credentials belong only to this server-side HTTP client. Do not
+        # forward them to the separate MCP subprocess, which does not need them.
+        for credential_name in (
+            "LLM_API_KEY",
+            "LLM_BASE_URL",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ):
+            self._env.pop(credential_name, None)
         if data_root:
             self._env["OFFICEGENIE_DATA_ROOT"] = str(data_root)
-        self._api_key = (
-            api_key
-            or os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-        )
-        self._llm = llm  # 테스트용 주입. None이면 Gemini 사용
+        self._api_key = api_key or os.environ.get("LLM_API_KEY")
+        self.base_url = (base_url or os.environ.get("LLM_BASE_URL", "")).strip()
+        self._llm = llm  # 테스트용 주입. None이면 서버 측 Jitda API 사용
         self._client: Client | None = None
         self._tool_decls: list[dict] | None = None
         self._lock = None  # asyncio.Lock (루프 스레드에서 생성)
@@ -285,35 +403,133 @@ class OfficeGenieAgent:
     async def _generate(self, contents: list, system: str, decls: list[dict]):
         if self._llm is not None:
             return await self._llm(contents=contents, system=system, decls=decls)
-        from google import genai
+
         from google.genai import types
 
         if not self._api_key:
-            raise RuntimeError("GEMINI_API_KEY가 설정되지 않았습니다.")
-        if not hasattr(self, "_genai"):
-            self._genai = genai.Client(
-                api_key=self._api_key,
-                http_options=types.HttpOptions(timeout=LLM_TIMEOUT_SEC * 1000),
+            raise RuntimeError("LLM_API_KEY is not configured.")
+        if not self.base_url:
+            raise RuntimeError("LLM_BASE_URL is not configured.")
+
+        parsed_url = urlsplit(self.base_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise RuntimeError("LLM_BASE_URL must be a valid http(s) URL.")
+
+        endpoint = self.base_url.rstrip("/")
+        if not endpoint.endswith("/chat/completions"):
+            endpoint += "/chat/completions"
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": declaration["name"],
+                    "description": declaration.get("description", ""),
+                    "parameters": declaration.get("parameters_json_schema")
+                    or {"type": "object", "properties": {}},
+                },
+            }
+            for declaration in decls
+        ]
+        payload = {
+            "model": self.model,
+            "messages": _openai_messages(contents, system),
+            "tools": tools,
+            "tool_choice": "auto",
+        }
+
+        def send_request() -> dict:
+            request = urllib.request.Request(
+                endpoint,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                method="POST",
             )
-        config = types.GenerateContentConfig(
-            system_instruction=system,
-            tools=[
-                types.Tool(
-                    function_declarations=[
-                        types.FunctionDeclaration(**d) for d in decls
-                    ]
-                )
-            ],
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                disable=True
-            ),
-            thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=LLM_TIMEOUT_SEC
+                ) as response:
+                    response_body = response.read()
+            except urllib.error.HTTPError as error:
+                response_body = error.read(8192)
+                message = _provider_error_message(response_body, self._api_key)
+                raise LLMAPIError(error.code, message) from None
+            except urllib.error.URLError as error:
+                reason = error.reason
+                if isinstance(reason, TimeoutError):
+                    detail = "request timed out"
+                else:
+                    detail = f"connection failed ({type(reason).__name__})"
+                raise RuntimeError(f"Jitda LLM API {detail}.") from None
+
+            try:
+                data = json.loads(response_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise RuntimeError("Jitda LLM API returned invalid JSON.") from None
+            if not isinstance(data, dict):
+                raise RuntimeError("Jitda LLM API returned an invalid response.")
+            return data
+
+        data = await asyncio.wait_for(
+            asyncio.to_thread(send_request), timeout=LLM_TIMEOUT_SEC + 5
         )
-        return await asyncio.wait_for(
-            self._genai.aio.models.generate_content(
-                model=self.model, contents=contents, config=config
-            ),
-            timeout=LLM_TIMEOUT_SEC + 5,
+        try:
+            assistant_message = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            raise RuntimeError(
+                "Jitda LLM API response is missing choices[0].message."
+            ) from None
+        if not isinstance(assistant_message, dict):
+            raise RuntimeError("Jitda LLM API returned an invalid assistant message.")
+
+        response_text = assistant_message.get("content")
+        if isinstance(response_text, list):
+            response_text = "".join(
+                str(item.get("text", ""))
+                for item in response_text
+                if isinstance(item, dict)
+            )
+        elif response_text is not None:
+            response_text = str(response_text)
+
+        parsed_calls: list[SimpleNamespace] = []
+        response_parts = []
+        if response_text:
+            response_parts.append(types.Part(text=response_text))
+
+        for index, tool_call in enumerate(assistant_message.get("tool_calls") or []):
+            function = tool_call.get("function") or {}
+            raw_args = function.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except json.JSONDecodeError:
+                raise RuntimeError(
+                    "Jitda LLM API returned invalid tool arguments."
+                ) from None
+            if not isinstance(args, dict):
+                raise RuntimeError("Jitda LLM API tool arguments must be an object.")
+            call_id = tool_call.get("id") or f"call_{index}"
+            name = str(function.get("name") or "")
+            parsed_calls.append(SimpleNamespace(id=call_id, name=name, args=args))
+            response_parts.append(
+                types.Part(
+                    function_call=types.FunctionCall(
+                        id=call_id,
+                        name=name,
+                        args=args,
+                    )
+                )
+            )
+
+        model_content = types.Content(role="model", parts=response_parts)
+        return SimpleNamespace(
+            candidates=[SimpleNamespace(content=model_content)],
+            function_calls=parsed_calls,
+            text=response_text,
         )
 
 
@@ -471,7 +687,7 @@ class ChatSession:
             # LLM 장애: 대화 기록을 되돌리고 키워드 폴백으로 응답
             del self.history[checkpoint:]
             reason = f"{type(e).__name__}: {e}"[:500]
-            log.warning("Gemini 호출 실패 → 폴백: %s", reason)
+            log.warning("LLM 호출 실패 → 폴백: %s", reason)
             fb = await self._fallback(text)
             fb.debug = reason
             return fb

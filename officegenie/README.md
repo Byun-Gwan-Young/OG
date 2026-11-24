@@ -5,8 +5,8 @@ MCP 기반 중소기업 범용 온보딩 에이전트. 회사 데이터(JSON 5�
 ```
 officegenie/
 ├── mcp_server.py        # FastMCP 서버 (툴 5개 + UI 전용 툴 4개)
-├── agent.py             # Gemini ↔ MCP 연결, app.py가 사용하는 인터페이스
-├── app.py               # (UI 담당 작성 예정)
+├── agent.py             # Jitda LLM API ↔ MCP 연결, app.py 공개 인터페이스
+├── app.py               # Streamlit 온보딩 대시보드와 챗봇
 ├── data/
 │   ├── bridgesoft/      # A사 (주)브릿지소프트
 │   └── nextwave/        # B사 (주)넥스트웨이브
@@ -20,10 +20,13 @@ officegenie/
 
 ```bash
 pip install -r requirements.txt
-pytest -q                                   # 40개 테스트
-export GEMINI_API_KEY=...                   # Google AI Studio에서 발급
-python scripts/cli_chat.py bridgesoft EMP001
+ pytest -q
+ export LLM_API_KEY=...                      # 서버 환경에 안전하게 설정
+ export LLM_BASE_URL=...                     # Jitda OpenAI-compatible API 기본 주소
+ python scripts/cli_chat.py bridgesoft EMP001
 ```
+
+기본 모델은 `jitda-chat`입니다. Streamlit UI는 서버에서 `.env`를 읽으며, API 키는 브라우저로 전달하지 않습니다.
 
 ## MCP 툴
 

@@ -10,7 +10,7 @@
 
 | 객체 | 만드는 곳 | 개수 | 역할 |
 |---|---|---|---|
-| `OfficeGenieAgent` | `@st.cache_resource` | 앱 전체 1개 | MCP 서버 연결, Gemini 클라이언트 |
+| `OfficeGenieAgent` | `@st.cache_resource` | 앱 전체 1개 | MCP 서버 연결, Jitda LLM API 클라이언트 |
 | `ChatSession` | `st.session_state` | 사용자 세션마다 1개 | 대화 기록, 선택한 회사·사번, 확인 대기 티켓 |
 
 ```python
@@ -18,7 +18,7 @@ from agent import OfficeGenieAgent
 
 @st.cache_resource
 def get_agent():
-    return OfficeGenieAgent()          # GEMINI_API_KEY 환경변수 사용
+    return OfficeGenieAgent()          # LLM_API_KEY / LLM_BASE_URL 환경변수 사용
 ```
 
 ---
@@ -125,8 +125,8 @@ if result["pending_ticket"]:
 | `INPUT_EMPTY` | ❌ | 공백 입력 | "질문을 입력해 주세요." | 경고 표시 (`st.warning`) |
 | `INPUT_TOO_LONG` | ❌ | 500자 초과 | "질문은 500자 이내로 입력해 주세요." | 경고 표시 |
 | `SERVER_UNAVAILABLE` | ❌ | MCP 서버 연결 실패 | "사내 시스템 연결이 일시적으로 원활하지 않습니다. ..." | 에러 표시 (`st.error`) |
-| `LLM_UNAVAILABLE` | ❌ | Gemini 장애 + 폴백도 실패 | "AI 응답 서비스에 일시적으로 연결할 수 없습니다. ..." | 에러 표시 |
-| `FALLBACK` | ❌ | Gemini 장애 → 키워드 검색 결과로 대체 | "AI 응답이 지연되어 ... 바로 찾은 결과를 보여드립니다." | 안내 배지 (선택) |
+| `LLM_UNAVAILABLE` | ❌ | LLM 장애 + 폴백도 실패 | "AI 응답 서비스에 일시적으로 연결할 수 없습니다. ..." | 에러 표시 |
+| `FALLBACK` | ❌ | LLM 장애 → 키워드 검색 결과로 대체 | "AI 응답이 지연되어 ... 바로 찾은 결과를 보여드립니다." | 안내 배지 (선택) |
 | `INVALID_SESSION` | ❌ | 회사·사번 값이 잘못됨 | "선택한 회사 또는 사번 정보를 확인할 수 없습니다. ..." | 드롭다운 다시 선택 유도 |
 | `NO_PENDING` | ❌ | 확인할 신청이 없는데 확정 클릭 | "확인을 기다리는 신청이 없습니다." | - |
 
@@ -206,8 +206,11 @@ if chat.pending_ticket:
 
 ```bash
 pip install -r requirements.txt
-export GEMINI_API_KEY=...          # Windows: set GEMINI_API_KEY=...
+export LLM_API_KEY=...             # 서버 환경에 안전하게 설정
+export LLM_BASE_URL=...            # Jitda OpenAI-compatible 기본 주소
 streamlit run app.py
 ```
+
+기본 요청 모델은 `jitda-chat`이며 `/chat/completions` 호환 API를 사용한다. UI는 API 키를 브라우저로 보내지 않는다.
 
 시연 후 티켓 데이터 초기화: `python mcp_server.py --reset-tickets` (REQ-004부터 다시 생성됨)

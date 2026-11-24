@@ -1,13 +1,19 @@
-"""터미널에서 Gemini 연동을 바로 확인하는 테스트용 채팅 (UI 없이).
+"""터미널에서 Jitda LLM 연동을 바로 확인하는 테스트용 채팅 (UI 없이).
 
-실행: GEMINI_API_KEY=... python scripts/cli_chat.py [company_id] [employee_id]
+실행: LLM_API_KEY=... LLM_BASE_URL=... python scripts/cli_chat.py [company_id] [employee_id]
 예시: python scripts/cli_chat.py bridgesoft EMP001
 명령: /yes 접수 확정, /no 취소, /side 사이드바 보기, /quit 종료
 """
+
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_DIR))
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(PROJECT_DIR.parent / ".env")
+
 from agent import OfficeGenieAgent  # noqa: E402
 
 
@@ -25,9 +31,17 @@ def main():
             if text == "/side":
                 print(agent.get_sidebar(company, employee))
                 continue
-            r = chat.confirm_ticket() if text == "/yes" else chat.cancel_ticket() if text == "/no" else chat.send(text)
+            r = (
+                chat.confirm_ticket()
+                if text == "/yes"
+                else chat.cancel_ticket()
+                if text == "/no"
+                else chat.send(text)
+            )
             print(f"\n지니> {r['reply']}")
-            print(f"  · code={r['code']} tools={[c['name'] + ':' + str(c['code']) for c in r['tool_calls']]}")
+            print(
+                f"  · code={r['code']} tools={[c['name'] + ':' + str(c['code']) for c in r['tool_calls']]}"
+            )
             if r.get("debug"):
                 print(f"  · [오류 원인] {r['debug']}")
             if r.get("pending_ticket"):

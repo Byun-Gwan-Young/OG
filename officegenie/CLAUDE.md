@@ -1,10 +1,10 @@
 # 오피스지니 (OfficeGenie) — Claude Code 작업 기준
 
-중소기업 신규 입사자용 온보딩 에이전트. Gemini(gemini-3.8-flash) + FastMCP(stdio) + Streamlit + 회사별 JSON 5종.
+중소기업 신규 입사자용 온보딩 에이전트. Jitda LLM API(jitda-chat, OpenAI-compatible) + FastMCP(stdio) + Streamlit + 회사별 JSON 5종.
 
 ## 파일과 담당
 - `mcp_server.py` — MCP 툴 (테크 리드). LLM용 5개 + `ui_` 접두사 UI 전용 4개
-- `agent.py` — Gemini ↔ MCP 연결, 세션 값 주입 (테크 리드)
+- `agent.py` — Jitda LLM API ↔ MCP 연결, 세션 값 주입 (테크 리드)
 - `app.py` — Streamlit UI (UI 담당). `agent.py`만 import한다
 - `data/<company_id>/` — policies, employees, locations, handovers, tickets (데이터·QA 담당)
 - `seed/` — 시연 초기화용 tickets.json 원본
@@ -28,9 +28,11 @@
 
 ## 명령
 - 테스트: `pytest -q` (LLM 없이 실행됨, 원본 data/를 건드리지 않음)
-- 터미널 채팅: `python scripts/cli_chat.py bridgesoft EMP001` (GEMINI_API_KEY 필요)
+- 터미널 채팅: `python scripts/cli_chat.py bridgesoft EMP001` (`LLM_API_KEY`, `LLM_BASE_URL` 필요)
 - 티켓 초기화: `python mcp_server.py --reset-tickets`
 
-## Gemini 3.8 Flash 주의
-- temperature, top_p, top_k를 넣지 않는다. 추론 강도는 `thinking_level`(low/medium/high)로 조절한다.
-- 모델 응답 Content는 그대로 history에 넣는다 (thought signature 보존). FunctionResponse에는 id와 name을 모두 넣는다.
+## Jitda API 보안 및 호환 규칙
+- API 키는 서버의 `LLM_API_KEY`에서 읽고 브라우저로 전달하지 않는다.
+- 기본 주소는 `LLM_BASE_URL`, 모델은 `jitda-chat`을 사용한다.
+- OpenAI-compatible `/chat/completions`의 도구 호출과 응답 형식을 유지한다.
+- FunctionResponse에는 id와 name을 모두 넣는다.
