@@ -484,6 +484,12 @@ def _render_chat_panel(company_id: str, employee_id: str) -> None:
                         args=("chat_input",),
                     )
             st.markdown(
+                "<div class='chat-char-count'>"
+                f"{len(str(st.session_state.get('chat_input', '') or ''))}/500"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
                 "<div class='chat-reset-note'>창을 닫으면 대화가 초기화됩니다.</div>",
                 unsafe_allow_html=True,
             )
@@ -900,6 +906,22 @@ def _render_styles() -> None:
             align-items: flex-end !important;
             margin: 0 0 14px !important;
         }
+        .st-key-chat_scroll [class*="st-key-chat_row_user_"] > [data-testid="stLayoutWrapper"] {
+            width: fit-content !important;
+            max-width: 86% !important;
+            margin-left: auto !important;
+            margin-right: 0 !important;
+            align-self: flex-end !important;
+            flex-direction: column !important;
+            align-items: flex-end !important;
+        }
+        .st-key-chat_scroll [class*="st-key-chat_row_assistant_"] > [data-testid="stLayoutWrapper"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin-left: 0 !important;
+            margin-right: auto !important;
+            align-self: flex-start !important;
+        }
         .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] {
             width: min(326px, 100%) !important;
             max-width: 100% !important;
@@ -911,24 +933,54 @@ def _render_styles() -> None:
             color: #34445B !important;
             font-size: 14px !important;
             line-height: 1.6 !important;
+            text-align: left !important;
+            align-items: stretch !important;
+            justify-content: center !important;
         }
         .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] {
-            width: fit-content !important;
+            width: max-content !important;
             max-width: 86% !important;
+            min-width: 60px !important;
+            flex: 0 1 auto !important;
+            align-self: flex-end !important;
+            margin-left: auto !important;
             box-sizing: border-box !important;
-            padding: 13px 15px !important;
+            padding: 10px 15px !important;
             border: 0 !important;
             border-radius: 14px 14px 4px 14px !important;
             background: var(--blue) !important;
             color: #fff !important;
             font-size: 14px !important;
             line-height: 1.55 !important;
-            overflow-wrap: anywhere;
+            word-break: keep-all !important;
+            overflow-wrap: break-word !important;
+            text-align: left !important;
+            align-items: stretch !important;
+            justify-content: center !important;
+        }
+        .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] [data-testid="stElementContainer"],
+        .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] [data-testid="stElementContainer"] {
+            width: 100% !important;
+            margin: 0 !important;
+        }
+        .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] [data-testid="stMarkdownContainer"],
+        .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] [data-testid="stMarkdownContainer"] {
+            width: 100% !important;
+            margin: 0 !important;
+            text-align: left !important;
         }
         .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] p,
-        .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] p { margin: 0 0 8px; line-height: 1.6; }
+        .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] p {
+            margin: 0 0 8px !important;
+            text-align: left !important;
+            line-height: 1.6 !important;
+        }
+        .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] p {
+            word-break: keep-all !important;
+            overflow-wrap: break-word !important;
+        }
         .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] p:last-child,
-        .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] p:last-child { margin-bottom: 0; }
+        .st-key-chat_scroll [class*="st-key-chat_bubble_user_"] p:last-child { margin-bottom: 0 !important; }
         .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] ul,
         .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] ol { margin: 6px 0 8px; padding-left: 20px; }
         .st-key-chat_scroll [class*="st-key-chat_bubble_assistant_"] li { margin: 3px 0; }
@@ -1027,6 +1079,52 @@ def _render_styles() -> None:
         .st-key-chat_footer [data-testid="stForm"] [data-testid="stHorizontalBlock"] { gap: 7px !important; align-items: center; }
         .st-key-chat_footer .st-key-chat_input_row [data-testid="stTextInput"] { flex: 1 1 0 !important; min-width: 0 !important; }
         .st-key-chat_footer [data-testid="stTextInput"] { margin: 0 !important; }
+        .st-key-chat_footer .st-key-chat_input_row {
+            padding-bottom: 19px !important;
+        }
+        .st-key-chat_footer [data-testid="stTextInput"] div:has(> [data-testid="InputInstructions"]) {
+            top: calc(100% + 2px) !important;
+            right: 0 !important;
+            bottom: auto !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 16px !important;
+        }
+        .st-key-chat_footer [data-testid="InputInstructions"] {
+            position: static !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-end !important;
+            width: 100% !important;
+            height: 16px !important;
+            margin: 0 !important;
+            padding: 0 43px 0 0 !important;
+            box-sizing: border-box !important;
+            color: #77859A !important;
+            pointer-events: none !important;
+        }
+        .st-key-chat_footer [data-testid="InputInstructions"] span:not(:last-child) {
+            display: none !important;
+        }
+        .st-key-chat_footer [data-testid="InputInstructions"] span:last-child {
+            color: #77859A !important;
+            font-size: 11px !important;
+            line-height: 16px !important;
+            white-space: nowrap !important;
+        }
+        .st-key-chat_footer .chat-char-count {
+            box-sizing: border-box;
+            height: 16px;
+            margin-top: 2px;
+            padding-right: 48px;
+            color: #77859A;
+            font-size: 11px;
+            line-height: 16px;
+            text-align: right;
+        }
+        .st-key-chat_footer:has([data-testid="InputInstructions"]) .chat-char-count {
+            visibility: hidden;
+        }
         .st-key-chat_footer [data-testid="stTextInput"] div,
         .st-key-chat_footer [data-testid="stTextInput"] input,
         .st-key-chat_footer [data-testid="stTextInput"] input:focus {
