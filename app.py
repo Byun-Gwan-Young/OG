@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -189,7 +190,97 @@ def _equipment_status(status: str) -> tuple[str, str]:
     return "접수 완료", "received"
 
 
-def _render_dashboard(employee: dict, tickets: list[dict]) -> None:
+def _resolve_employee_id(
+    company_id: str,
+    employee_summaries: list[dict],
+    employee_records: list[dict] | None,
+) -> str | None:
+    available_ids = {
+        employee.get("employee_id")
+        for employee in employee_summaries
+        if employee.get("employee_id")
+    }
+
+    current_identity = st.session_state.get("dashboard_identity")
+    current_employee_id = st.session_state.get("employee_id")
+    if (
+        isinstance(current_identity, (tuple, list))
+        and len(current_identity) == 2
+        and current_identity[0] == company_id
+    ):
+        current_employee_id = current_identity[1]
+    if current_employee_id in available_ids:
+        return current_employee_id
+
+    # On a fresh demo session, select a current onboarding employee from DB
+    # metadata instead of pinning an employee ID or relying on array position.
+    onboarding_records = [
+        record
+        for record in employee_records or []
+        if isinstance(record, dict)
+        and record.get("employee_id") in available_ids
+        and isinstance(record.get("onboarding_week"), int)
+        and not isinstance(record.get("onboarding_week"), bool)
+    ]
+    if onboarding_records:
+        selected = min(
+            onboarding_records,
+            key=lambda record: (
+                record["onboarding_week"],
+                str(record["employee_id"]),
+            ),
+        )
+        return selected["employee_id"]
+
+    if len(available_ids) == 1:
+        return next(iter(available_ids))
+    return None
+
+
+def _decimal_text(value: Decimal) -> str:
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _remaining_leave_value(value: object) -> str:
+    try:
+        if value is None or isinstance(value, bool):
+            raise InvalidOperation
+        remaining_days = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return "<div class='leave-value leave-value-unavailable'>확인 불가</div>"
+
+    if not remaining_days.is_finite() or remaining_days < 0:
+        return "<div class='leave-value leave-value-unavailable'>확인 불가</div>"
+
+    whole_days = int(remaining_days)
+    remaining_hours = (remaining_days - Decimal(whole_days)) * Decimal(8)
+    day_markup = ""
+    if whole_days > 0 or remaining_hours == 0:
+        day_markup = (
+            "<span class='leave-group leave-day-group'>"
+            f"<span class='leave-number'>{whole_days}</span>"
+            "<span class='leave-unit'>일</span>"
+            "</span>"
+        )
+
+    hour_markup = ""
+    if remaining_hours > 0:
+        hour_markup = (
+            "<span class='leave-group leave-hour-group'>"
+            f"<span class='leave-number'>{_escape(_decimal_text(remaining_hours))}</span>"
+            "<span class='leave-unit'>시간</span>"
+            "</span>"
+        )
+
+    return f"<div class='leave-value'>{day_markup}{hour_markup}</div>"
+
+
+def _render_dashboard(
+    employee: dict, tickets: list[dict], remaining_leave: object = None
+) -> None:
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     weekdays = ("월", "화", "수", "목", "금", "토", "일")
     date_label = f"{now.month}월 {now.day}일 {weekdays[now.weekday()]}요일"
@@ -265,6 +356,10 @@ def _render_dashboard(employee: dict, tickets: list[dict]) -> None:
             <span class="eyebrow">내 정보</span>
             <h2>{name}</h2>
             <div class="profile-meta"><span>{department}</span><i></i><span>{position}</span></div>
+          </div>
+          <div class="leave-summary">
+            <span class="eyebrow">잔여 연차</span>
+            {_remaining_leave_value(remaining_leave)}
           </div>
           <span class="new-employee-badge">신입사원</span>
         </div>
@@ -606,6 +701,7 @@ def _render_styles() -> None:
             box-shadow: 0 1px 3px rgba(32, 45, 64, 0.018);
         }
         .profile-card {
+            position: relative;
             height: 184px;
             display: flex;
             align-items: center;
@@ -635,6 +731,39 @@ def _render_styles() -> None:
         }
         .profile-meta { display: flex; align-items: center; gap: 16px; color: #71819A; font-size: 15px; }
         .profile-meta i { width: 1px; height: 17px; background: var(--line); }
+        .leave-summary {
+            position: absolute;
+            left: 62%;
+            top: 43px;
+            min-width: 120px;
+            text-align: left;
+        }
+        .leave-value {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            margin-top: 6px;
+            color: var(--blue);
+            white-space: nowrap;
+        }
+        .leave-group { display: inline-flex; align-items: baseline; gap: 2px; }
+        .leave-number {
+            color: var(--blue);
+            font-size: 32px;
+            font-weight: 720;
+            line-height: 1.28;
+            letter-spacing: -0.8px;
+        }
+        .leave-unit { color: var(--blue); font-size: 18px; font-weight: 620; line-height: 1.3; }
+        .leave-hour-group .leave-number { font-size: 22px; letter-spacing: -0.35px; }
+        .leave-hour-group .leave-unit { font-size: 15px; }
+        .leave-value-unavailable {
+            display: block;
+            color: var(--muted);
+            font-size: 15px;
+            font-weight: 550;
+            line-height: 1.8;
+        }
         .new-employee-badge {
             align-self: flex-start;
             margin: 1px 0 0 auto;
@@ -1196,7 +1325,12 @@ def _render_styles() -> None:
             .employee-placeholder svg { width: 48px; height: 48px; }
             .profile-copy h2 { font-size: 25px; }
             .profile-meta { flex-wrap: wrap; gap: 8px; font-size: 13px; }
-            .new-employee-badge { position: absolute; right: 26px; margin: 0; padding: 5px 10px; font-size: 11px; }
+            .leave-summary { left: auto; right: 20px; top: 60px; min-width: 0; }
+            .leave-summary .eyebrow { font-size: 12px; }
+            .leave-number { font-size: 24px; }
+            .leave-unit { font-size: 15px; }
+            .leave-value-unavailable { font-size: 12px; }
+            .new-employee-badge { position: absolute; top: 14px; right: 20px; margin: 0; padding: 5px 10px; font-size: 11px; }
             .dashboard-grid { grid-template-columns: 1fr; gap: 14px; }
             .dashboard-card { min-height: auto; padding: 20px 18px 16px; }
             .notice-row, .equipment-row { min-height: 58px; font-size: 13px; }
@@ -1246,10 +1380,12 @@ def main() -> None:
     if not employees:
         st.error("등록된 사원 정보가 없습니다.")
         st.stop()
-    employee = next(
-        (row for row in employees if row.get("employee_id") == "EMP001"), employees[0]
-    )
-    employee_id = employee["employee_id"]
+    # 사원 목록(onboarding_week 포함)과 잔여 연차는 모두 MCP(DB) 응답에서 가져온다.
+    employee_id = _resolve_employee_id(company_id, employees, employees)
+    if employee_id is None:
+        st.error("현재 사원 정보를 확인할 수 없습니다.")
+        st.stop()
+    employee = next(row for row in employees if row.get("employee_id") == employee_id)
 
     dashboard_identity = (company_id, employee_id)
     if st.session_state.get("dashboard_identity") != dashboard_identity:
@@ -1261,12 +1397,19 @@ def main() -> None:
         sidebar_data = sidebar_result.get("data", {})
         dashboard_employee = sidebar_data.get("employee", employee)
         tickets = sidebar_data.get("tickets", [])
+        annual_leave = sidebar_data.get("annual_leave")
+        remaining_leave = (
+            annual_leave.get("remaining_days")
+            if isinstance(annual_leave, dict)
+            else None
+        )
     else:
         dashboard_employee = employee
         tickets = []
+        remaining_leave = None
 
     with st.container(key="dashboard_root"):
-        _render_dashboard(dashboard_employee, tickets)
+        _render_dashboard(dashboard_employee, tickets, remaining_leave)
 
     with st.container(key="chat_fab"):
         st.button(

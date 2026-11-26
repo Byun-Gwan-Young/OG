@@ -172,7 +172,7 @@ def render_home(base: str) -> str:
     e = html.escape
     companies = "".join(
         f"<li><b>{e(c['company_name'])}</b><code>{e(c['company_id'])}</code></li>"
-        for c in core.ui_list_companies()["data"]["companies"]
+        for c in (core.ui_list_companies().get("data") or {}).get("companies", [])
     )
     tools = "".join(
         f'<div class="tool"><div class="ico">{i}</div><div><div class="tn">{e(t)}</div>'
@@ -272,7 +272,12 @@ async def home(request: Request) -> HTMLResponse:
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "companies": core.list_company_ids(),
+    try:
+        companies = core.list_company_ids()
+        status = "ok"
+    except core.storage.StorageUnavailable:
+        companies, status = [], "db_unavailable"
+    return JSONResponse({"status": status, "companies": companies,
                          "tokens_loaded": len(load_tokens())})
 
 
@@ -280,5 +285,7 @@ if __name__ == "__main__":
     if not load_tokens():
         print("[경고] tokens.json이 없습니다. 먼저 토큰을 발급하세요:\n"
               "  python scripts/issue_token.py bridgesoft EMP001 --name \"테스터\"")
+    core.configure_logging()
+    core.prepare_database()
     print(f"홈페이지: http://localhost:{PORT}/   MCP: http://localhost:{PORT}/mcp")
     mcp.run(transport="http", host=HOST, port=PORT, show_banner=False)

@@ -1,25 +1,20 @@
 """MCP 툴 단위 테스트 (LLM 없이 툴 함수 직접 호출).
 
 실행: pytest -q tests/test_tools.py
-원본 data/는 건드리지 않고 임시 폴더 복사본으로 테스트한다.
+원본 data/는 건드리지 않고, 테스트마다 임시 DB(tests/conftest.py의 fresh_db)에
+data/를 가져온 뒤 티켓을 seed 상태로 초기화해서 테스트한다.
 """
-import shutil
-from pathlib import Path
-
 import pytest
 
 import mcp_server as s
+import storage
 
-ROOT = Path(__file__).resolve().parents[1]
 DENY = s.MSG["DENIED_OR_NOT_FOUND"]
+pytestmark = pytest.mark.usefixtures("fresh_db")
 
 
-@pytest.fixture(autouse=True)
-def temp_data(tmp_path, monkeypatch):
-    shutil.copytree(ROOT / "data", tmp_path / "data")
-    monkeypatch.setattr(s, "DATA_ROOT", tmp_path / "data")
-    s._cache.clear()
-    yield
+def tickets_doc(company_id):
+    return storage.get_company_document(company_id, "tickets")
 
 
 A, B = "bridgesoft", "nextwave"
@@ -86,11 +81,11 @@ def test_handover_own_department_by_alias():
 
 
 def test_ticket_preview_does_not_write():
-    before = s.load(A, "tickets")["next_sequence"]
+    before = tickets_doc(A)["next_sequence"]
     r = s.create_support_ticket("노트북 거치대", A, "EMP001")
     assert r["code"] == "NEEDS_CONFIRMATION"
     assert r["data"]["preview"]["item"] == "노트북 거치대"
-    assert s.load(A, "tickets")["next_sequence"] == before
+    assert tickets_doc(A)["next_sequence"] == before
 
 
 def test_ticket_created_req004_and_sidebar_updates():
@@ -99,7 +94,7 @@ def test_ticket_created_req004_and_sidebar_updates():
     assert r["data"]["ticket"]["status"] == "접수완료"
     side = s.ui_get_sidebar(A, "EMP001")
     assert side["data"]["tickets"][0]["ticket_id"] == "REQ-004"
-    assert s.load(A, "tickets")["next_sequence"] == 5
+    assert tickets_doc(A)["next_sequence"] == 5
 
 
 def test_dual_monitor_alias_creates_monitor_ticket():
@@ -111,7 +106,7 @@ def test_rapid_duplicate_submission_ignored():
     s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)
     r = s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)
     assert r["code"] in {"DUPLICATE_IGNORED", "REJECTED"}
-    assert len(s.load(A, "tickets")["tickets"]) == 4
+    assert len(tickets_doc(A)["tickets"]) == 4
 
 
 # ---- 예외 상황 1: 미등록 정보 / 권한 초과 ----------------------------------
@@ -145,9 +140,9 @@ def test_invalid_session():
 
 @pytest.mark.parametrize("item", ["업무용 태블릿", "게임기"])
 def test_unknown_equipment_rejected_without_mutation(item):
-    before = s.load(A, "tickets")
+    before = tickets_doc(A)
     r = s.ui_confirm_ticket(A, "EMP001", item, 1)
-    after = s.load(A, "tickets")
+    after = tickets_doc(A)
     assert r["code"] == "REJECTED" and r["data"]["reason"] == "UNKNOWN_EQUIPMENT"
     assert after["next_sequence"] == before["next_sequence"]
     assert len(after["tickets"]) == len(before["tickets"])

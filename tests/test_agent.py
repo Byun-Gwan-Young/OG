@@ -3,15 +3,12 @@
 Gemini API 키 없이 '툴 호출 → 서버 응답 → 결과 전달' 흐름과 보안 주입, 확인 절차,
 장애 처리를 검증한다. 실행: pytest -q tests/test_agent.py
 """
-import shutil
-from pathlib import Path
 
 import pytest
 from google.genai import types
 
 from agent import ChatSession, OfficeGenieAgent, _YES, _NO
 
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def fc_response(*calls):
@@ -48,17 +45,12 @@ class ScriptedLLM:
 
 
 @pytest.fixture
-def data_root(tmp_path):
-    shutil.copytree(ROOT / "data", tmp_path / "data")
-    return tmp_path / "data"
-
-
-@pytest.fixture
-def make_agent(data_root):
+def make_agent(fresh_db):
+    # MCP 하위 프로세스는 conftest가 지정한 임시 테스트 DB를 환경 변수로 물려받는다.
     agents = []
 
     def _make(llm):
-        a = OfficeGenieAgent(data_root=data_root, llm=llm)
+        a = OfficeGenieAgent(llm=llm)
         agents.append(a)
         return a
     yield _make
@@ -98,7 +90,7 @@ def test_other_employee_denied(make_agent):
     assert llm.last_tool_results[0]["code"] == "PERMISSION_DENIED"
 
 
-def test_ticket_requires_confirmation_then_created(make_agent, data_root):
+def test_ticket_requires_confirmation_then_created(make_agent):
     # LLM이 confirmed=True로 바로 접수하려 해도 미리보기로만 처리된다
     llm = ScriptedLLM({"거치대": [("create_support_ticket", {"item": "노트북 거치대", "quantity": 1, "confirmed": True})]})
     agent = make_agent(llm)

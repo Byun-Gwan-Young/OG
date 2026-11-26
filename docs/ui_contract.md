@@ -213,4 +213,4 @@ streamlit run app.py
 
 기본 요청 모델은 `jitda-chat`이며 `/chat/completions` 호환 API를 사용한다. UI는 API 키를 브라우저로 보내지 않는다.
 
-시연 후 티켓 데이터 초기화: `python mcp_server.py --reset-tickets` (REQ-004부터 다시 생성됨)
+시연 후 티켓 데이터 초기화: `python scripts/import_company.py --all --reset-tickets` (seed 티켓으로 교체. 처음 가져온 DB라면 REQ-004부터, 이미 더 큰 번호를 쓴 적이 있으면 그다음 번호부터 생성됨)

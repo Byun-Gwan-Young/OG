@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 *.tmp
 tokens.json
+officegenie.db
+officegenie.db-journal
+.venv/

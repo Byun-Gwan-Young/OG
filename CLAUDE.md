@@ -6,7 +6,9 @@
 - `mcp_server.py` — MCP 툴 (테크 리드). LLM용 5개 + `ui_` 접두사 UI 전용 4개
 - `agent.py` — Jitda LLM API ↔ MCP 연결, 세션 값 주입 (테크 리드)
 - `app.py` — Streamlit UI (UI 담당). `agent.py`만 import한다
-- `data/<company_id>/` — policies, employees, locations, handovers, tickets (데이터·QA 담당)
+- `storage.py` — DB 저장소 (SQLAlchemy Core, PostgreSQL(Neon)/SQLite). 서버의 모든 데이터 접근은 여기로만
+- `scripts/import_company.py` — 회사 JSON 검증 → DB 가져오기, `--all`, `--reset-tickets`, `--yes`
+- `data/<company_id>/` — policies, employees, locations, handovers, tickets (데이터·QA 담당). DB 가져오기 원본
 - `seed/` — 시연 초기화용 tickets.json 원본
 - `docs/ui_contract.md` — app.py ↔ agent.py 규격. **반환 형식을 바꾸면 이 문서도 같이 고친다**
 
@@ -18,6 +20,8 @@
 5. 차단·미등록 시 고정 문구는 `MSG["DENIED_OR_NOT_FOUND"]` 하나만 쓴다.
 6. 티켓은 사용자 확인(confirm_ticket) 후에만 생성한다. 거절 시 tickets.json을 수정하지 않는다.
 7. 파이썬 예외를 UI로 올리지 않는다. agent 메서드는 항상 ChatResult dict를 돌려준다.
+8. 서버 코드는 JSON 파일을 직접 읽거나 쓰지 않는다. 데이터 접근은 storage.py로만. 테스트는 DATABASE_URL(공유 DB)에 연결하지 않는다.
+9. 커밋 메시지에 Co-Authored-By 등 AI 관련 문구를 넣지 않는다.
 
 ## 확인 기준 (PRD)
 - 정상 1: bridgesoft/EMP001 "점심 식대 한도랑 내 남은 연차 며칠이야?" → 12,000원(복리후생 규정 제4조), 잔여 11일
@@ -29,7 +33,8 @@
 ## 명령
 - 테스트: `pytest -q` (LLM 없이 실행됨, 원본 data/를 건드리지 않음)
 - 터미널 채팅: `python scripts/cli_chat.py bridgesoft EMP001` (`LLM_API_KEY`, `LLM_BASE_URL` 필요)
-- 티켓 초기화: `python mcp_server.py --reset-tickets`
+- 데이터 가져오기: `python scripts/import_company.py --all` (`DATABASE_URL` 없으면 로컬 SQLite)
+- 티켓 초기화: `python scripts/import_company.py --all --reset-tickets`
 
 ## Jitda API 보안 및 호환 규칙
 - API 키는 서버의 `LLM_API_KEY`에서 읽고 브라우저로 전달하지 않는다.

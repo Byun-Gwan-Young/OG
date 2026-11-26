@@ -5,13 +5,13 @@
 **중소기업 신규 입사자를 위한 온보딩 홈페이지 + MCP 서버**
 
 "점심 식대 한도랑 내 남은 연차 며칠이야?" 한 문장이면 사내 규정, 내 인사 정보, 사무실 위치, 인수인계서, 비품 신청까지 끝.<br>
-JSON 데이터 5종만 바꾸면 **코드 수정 없이 어느 회사에나** 적용됩니다.
+JSON 데이터 5종을 DB로 가져오기만 하면 **코드 수정 없이 어느 회사에나** 적용됩니다.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-4.x-6E56CF)
 ![LLM](https://img.shields.io/badge/LLM-Jitda%20API-111827)
 ![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?logo=streamlit&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-51%20passed-2EA043)
+![Tests](https://img.shields.io/badge/tests-73%20passed-2EA043)
 
 <img src="docs/images/dashboard.png" alt="오피스지니 대시보드" width="860">
 
@@ -58,7 +58,8 @@ JSON 데이터 5종만 바꾸면 **코드 수정 없이 어느 회사에나** �
 git clone https://github.com/Byun-Gwan-Young/OG.git officegenie && cd officegenie
 python -m venv .venv && source .venv/bin/activate   # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cp env.example .env                                  # LLM_API_KEY, LLM_BASE_URL 입력
+cp env.example .env                                  # LLM_API_KEY, LLM_BASE_URL (선택: DATABASE_URL) 입력
+python scripts/import_company.py --all               # 회사 JSON → DB (DATABASE_URL이 없으면 로컬 SQLite)
 streamlit run app.py
 ```
 

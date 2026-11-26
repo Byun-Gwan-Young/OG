@@ -2,11 +2,12 @@
 오피스지니 (OfficeGenie) MCP 서버
 =================================
 
-회사별 표준 JSON 5종(data/<company_id>/*.json)을 읽어 온보딩 툴을 제공하는 FastMCP 서버.
-코드 수정 없이 data/ 아래에 회사 폴더를 추가하거나 교체하면 다른 회사에 그대로 재사용된다.
+회사 데이터를 DB(storage.py: PostgreSQL 또는 로컬 SQLite)에서 읽어 온보딩 툴을 제공하는 FastMCP 서버.
+서버는 실행 중에 JSON 파일을 읽거나 쓰지 않는다. 회사 JSON은 scripts/import_company.py로 DB에 넣는다.
 
-실행:  python mcp_server.py               (stdio, agent.py가 자동으로 띄움)
-초기화: python mcp_server.py --reset-tickets   (seed/ 의 tickets.json으로 시연 데이터 복구)
+실행:   python mcp_server.py                                   (stdio, agent.py가 자동으로 띄움)
+가져오기: python scripts/import_company.py --all
+초기화:   python scripts/import_company.py --all --reset-tickets  (seed/ 티켓으로 시연 데이터 복구)
 
 [보안 원칙]
 - 모든 툴은 company_id, employee_id(세션 값)를 인자로 받는다.
@@ -20,28 +21,25 @@
 from __future__ import annotations
 
 import argparse
-import json
+import logging
 import os
 import re
-import shutil
-import tempfile
-import threading
+import sys
+from functools import wraps
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Literal
 
 from fastmcp import FastMCP
+
+import storage
 
 # ---------------------------------------------------------------------------
 # 설정
 # ---------------------------------------------------------------------------
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_ROOT = Path(os.environ.get("OFFICEGENIE_DATA_ROOT", BASE_DIR / "data"))
-SEED_ROOT = Path(os.environ.get("OFFICEGENIE_SEED_ROOT", BASE_DIR / "seed"))
-REQUIRED_FILES = ("policies", "employees", "locations", "handovers", "tickets")
 KST = timezone(timedelta(hours=9))
 DUPLICATE_WINDOW_SEC = 10  # 같은 신청이 이 시간 안에 다시 오면 새 티켓을 만들지 않음
+log = logging.getLogger("officegenie.mcp")
 
 # 사용자에게 그대로 보여줄 고정 문구 (UI·LLM 공통)
 MSG = {
@@ -54,6 +52,7 @@ MSG = {
     "INVALID_INPUT": "요청 내용을 이해하지 못했습니다. 조금 더 구체적으로 입력해 주세요.",
     "INVALID_QUANTITY": "신청 수량은 1 이상의 숫자로 입력해 주세요.",
     "NEEDS_CONFIRMATION": "아래 내용으로 신청을 접수할까요? 확인하시면 티켓이 발급됩니다.",
+    "SERVER_UNAVAILABLE": "사내 시스템 연결이 일시적으로 원활하지 않습니다. 잠시 후 다시 시도해 주세요.",
 }
 
 mcp = FastMCP(
@@ -64,13 +63,10 @@ mcp = FastMCP(
     ),
 )
 
-_write_lock = threading.Lock()
-_cache: dict[tuple[str, str], tuple[float, dict]] = {}
-
-
 # ---------------------------------------------------------------------------
 # 공통 유틸
 # ---------------------------------------------------------------------------
+
 
 def ok(code: str = "OK", data: Any = None, message: str = "") -> dict:
     return {"ok": True, "code": code, "message": message, "data": data}
@@ -80,72 +76,50 @@ def fail(code: str, message: str, data: Any = None) -> dict:
     return {"ok": False, "code": code, "message": message, "data": data}
 
 
+def _storage_safe(function):
+    """Keep database failures inside the existing MCP result envelope."""
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            with storage.track_database_roundtrips(function.__name__):
+                return function(*args, **kwargs)
+        except storage.StorageUnavailable:
+            log.warning("MCP database unavailable tool=%s", function.__name__)
+            return fail("SERVER_UNAVAILABLE", MSG["SERVER_UNAVAILABLE"])
+
+    return wrapped
+
+
 def _norm(text: str | None) -> str:
     """비교용 정규화: 공백 제거 + 소문자."""
     return re.sub(r"\s+", "", (text or "")).lower()
 
 
 def list_company_ids() -> list[str]:
-    if not DATA_ROOT.is_dir():
-        return []
-    ids = []
-    for d in sorted(DATA_ROOT.iterdir()):
-        if d.is_dir() and not d.name.startswith((".", "_")) and all(
-            (d / f"{name}.json").is_file() for name in REQUIRED_FILES
-        ):
-            ids.append(d.name)
-    return ids
-
-
-def _path(company_id: str, name: str) -> Path:
-    if company_id not in list_company_ids():
-        raise KeyError(company_id)
-    return DATA_ROOT / company_id / f"{name}.json"
+    return storage.list_company_ids()
 
 
 def load(company_id: str, name: str) -> dict:
-    """회사 JSON을 읽는다. 파일이 바뀌면(mtime) 다시 읽는다."""
-    path = _path(company_id, name)
-    mtime = path.stat().st_mtime
-    key = (company_id, name)
-    cached = _cache.get(key)
-    if cached and cached[0] == mtime:
-        return cached[1]
-    with path.open(encoding="utf-8") as f:
-        data = json.load(f)
-    _cache[key] = (mtime, data)
-    return data
+    """회사 문서를 DB에서 읽는다 (레거시 내부 호출 형식 호환)."""
+    return storage.get_company_document(company_id, name)
 
 
-def save(company_id: str, name: str, data: dict) -> None:
-    """임시 파일에 쓴 뒤 교체(원자적 저장). 저장 중 오류가 나도 원본이 깨지지 않는다."""
-    path = _path(company_id, name)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-    _cache.pop((company_id, name), None)
-
-
-def resolve_session(company_id: str, employee_id: str) -> tuple[dict | None, dict | None]:
+def resolve_session(
+    company_id: str, employee_id: str
+) -> tuple[dict | None, dict | None]:
     """(사원 정보, 에러 응답) 반환. 세션 값이 잘못되면 에러 응답을 준다."""
     try:
-        employees = load(company_id, "employees")["employees"]
-    except (KeyError, FileNotFoundError):
+        employee = storage.get_employee(company_id, employee_id)
+    except KeyError:
         return None, fail("INVALID_SESSION", MSG["INVALID_SESSION"])
-    for emp in employees:
-        if emp["employee_id"] == employee_id:
-            return emp, None
-    return None, fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+    if employee is None:
+        return None, fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+    return employee, None
 
 
 def department_aliases(company_id: str) -> dict[str, str]:
-    """부서명 별칭 → 정식 부서명. (locations.json의 부서 위치 별칭을 재사용)"""
+    """부서명 별칭 → 정식 부서명. (locations 데이터의 부서 위치 별칭을 재사용)"""
     departments = {e["department"] for e in load(company_id, "employees")["employees"]}
     mapping = {_norm(d): d for d in departments}
     for loc in load(company_id, "locations")["locations"]:
@@ -160,8 +134,30 @@ def department_aliases(company_id: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 _PARTICLES = (
-    "이랑", "에서", "으로", "이야", "인가요", "인가", "나요", "까지", "부터",
-    "은", "는", "이", "가", "을", "를", "랑", "와", "과", "도", "의", "에", "로", "야", "요",
+    "이랑",
+    "에서",
+    "으로",
+    "이야",
+    "인가요",
+    "인가",
+    "나요",
+    "까지",
+    "부터",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "랑",
+    "와",
+    "과",
+    "도",
+    "의",
+    "에",
+    "로",
+    "야",
+    "요",
 )
 
 
@@ -202,6 +198,7 @@ def _score_policy(policy: dict, query_n: str, tokens: list[str]) -> float:
 
 
 @mcp.tool
+@_storage_safe
 def search_policy(query: str, company_id: str, employee_id: str) -> dict:
     """사내 규정(취업규칙·복리후생·비품·계정·재택·회의실 등)을 검색한다.
 
@@ -242,29 +239,37 @@ def search_policy(query: str, company_id: str, employee_id: str) -> dict:
     for s, p in scored[:3]:
         if s < top * 0.4:  # 1위와 점수 차가 크면 제외 (엉뚱한 조항 노출 방지)
             break
-        results.append({
-            "policy_id": p["id"],
-            "category": p["category"],
-            "article": p["article"],
-            "title": p["title"],
-            "content": p["content"],
-            "policy_type": p["policy_type"],
-            "citation": f"{p['category']} {p['article']} ({p['title']})",
-            "is_reference_only": p["policy_type"] != "company",
-        })
-    return ok(data={
-        "company_name": doc.get("company_name") or doc.get("company"),
-        "results": results,
-        "reference_disclaimer": config.get("fallback_disclaimer"),
-    })
+        results.append(
+            {
+                "policy_id": p["id"],
+                "category": p["category"],
+                "article": p["article"],
+                "title": p["title"],
+                "content": p["content"],
+                "policy_type": p["policy_type"],
+                "citation": f"{p['category']} {p['article']} ({p['title']})",
+                "is_reference_only": p["policy_type"] != "company",
+            }
+        )
+    return ok(
+        data={
+            "company_name": doc.get("company_name") or doc.get("company"),
+            "results": results,
+            "reference_disclaimer": config.get("fallback_disclaimer"),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # 2. 본인 인사 정보 (MVP)
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool
-def get_employee_info(company_id: str, employee_id: str, target: str | None = None) -> dict:
+@_storage_safe
+def get_employee_info(
+    company_id: str, employee_id: str, target: str | None = None
+) -> dict:
     """로그인한 사용자 '본인'의 인사 정보(이름, 부서, 직급, 잔여 연차)를 조회한다.
 
     호출 조건: "내 남은 연차", "내 부서", "내 직급"처럼 본인 정보를 물을 때.
@@ -278,30 +283,36 @@ def get_employee_info(company_id: str, employee_id: str, target: str | None = No
     if target and target.strip():
         t = _norm(target)
         if t not in {_norm(me["employee_id"]), _norm(me["name"]), "나", "본인", "내"}:
-            return fail("PERMISSION_DENIED", MSG["DENIED_OR_NOT_FOUND"], {"target": target})
+            return fail(
+                "PERMISSION_DENIED", MSG["DENIED_OR_NOT_FOUND"], {"target": target}
+            )
     leave = me.get("annual_leave", {})
-    return ok(data={
-        "employee_id": me["employee_id"],
-        "name": me["name"],
-        "department": me["department"],
-        "position": me.get("position"),
-        "job_title": me.get("job_title"),
-        "employment_status": me.get("employment_status"),
-        "onboarding_week": me.get("onboarding_week"),
-        "annual_leave": {
-            "granted_days": leave.get("granted_days"),
-            "used_days": leave.get("used_days"),
-            "remaining_days": leave.get("remaining_days"),
-            "as_of": leave.get("as_of"),
-        },
-    })
+    return ok(
+        data={
+            "employee_id": me["employee_id"],
+            "name": me["name"],
+            "department": me["department"],
+            "position": me.get("position"),
+            "job_title": me.get("job_title"),
+            "employment_status": me.get("employment_status"),
+            "onboarding_week": me.get("onboarding_week"),
+            "annual_leave": {
+                "granted_days": leave.get("granted_days"),
+                "used_days": leave.get("used_days"),
+                "remaining_days": leave.get("remaining_days"),
+                "as_of": leave.get("as_of"),
+            },
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # 3. 사내 장소 조회 (추가 기능)
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool
+@_storage_safe
 def get_office_location(place: str, company_id: str, employee_id: str) -> dict:
     """사옥 안 장소(회의실, 복합기, 휴게실, 부서 자리, 교육실 등)의 건물·층·구역을 조회한다.
 
@@ -340,24 +351,35 @@ def get_office_location(place: str, company_id: str, employee_id: str) -> dict:
     matches.sort(key=lambda x: x[0], reverse=True)
     top = matches[0][0]
     picked = [loc for s, loc in matches if s == top or top < 100][:5]
-    return ok(data={"locations": [{
-        "name": loc["name"],
-        "building": loc["building"],
-        "floor": loc["floor"],
-        "zone": loc["zone"],
-        "guide": loc.get("guide"),
-        "access": loc.get("access"),
-        "capacity": loc.get("capacity"),
-        "display": f"{loc['building']} {loc['floor']}층 {loc['zone']}",
-    } for loc in picked]})
+    return ok(
+        data={
+            "locations": [
+                {
+                    "name": loc["name"],
+                    "building": loc["building"],
+                    "floor": loc["floor"],
+                    "zone": loc["zone"],
+                    "guide": loc.get("guide"),
+                    "access": loc.get("access"),
+                    "capacity": loc.get("capacity"),
+                    "display": f"{loc['building']} {loc['floor']}층 {loc['zone']}",
+                }
+                for loc in picked
+            ]
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # 4. 소속 부서 인수인계서 (추가 기능)
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool
-def get_handover_doc(company_id: str, employee_id: str, department: str | None = None) -> dict:
+@_storage_safe
+def get_handover_doc(
+    company_id: str, employee_id: str, department: str | None = None
+) -> dict:
     """사용자 '소속 부서'의 신입사원 인수인계 업무서를 조회한다.
 
     호출 조건: "내 직무 인수인계서", "1주 차에 뭐 해야 해" 등.
@@ -369,27 +391,40 @@ def get_handover_doc(company_id: str, employee_id: str, department: str | None =
     me, err = resolve_session(company_id, employee_id)
     if err:
         return err
-    if department and department.strip() and _norm(department) not in {"내", "우리", "우리팀", "본인", "내부서"}:
+    if (
+        department
+        and department.strip()
+        and _norm(department) not in {"내", "우리", "우리팀", "본인", "내부서"}
+    ):
         canonical = department_aliases(company_id).get(_norm(department))
         if canonical != me["department"]:
-            return fail("PERMISSION_DENIED", MSG["DENIED_OR_NOT_FOUND"], {"department": department})
+            return fail(
+                "PERMISSION_DENIED",
+                MSG["DENIED_OR_NOT_FOUND"],
+                {"department": department},
+            )
 
     for doc in load(company_id, "handovers")["handovers"]:
         if doc["department"] == me["department"]:
-            return ok(data={
-                "handover_id": doc["handover_id"],
-                "department": doc["department"],
-                "title": doc["title"],
-                "last_updated": doc.get("last_updated"),
-                "summary": doc.get("summary", {}),
-                "notes": doc.get("notes", []),
-            })
-    return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"], {"department": me["department"]})
+            return ok(
+                data={
+                    "handover_id": doc["handover_id"],
+                    "department": doc["department"],
+                    "title": doc["title"],
+                    "last_updated": doc.get("last_updated"),
+                    "summary": doc.get("summary", {}),
+                    "notes": doc.get("notes", []),
+                }
+            )
+    return fail(
+        "NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"], {"department": me["department"]}
+    )
 
 
 # ---------------------------------------------------------------------------
 # 5. 비품·계정 신청 티켓 (추가 기능)
 # ---------------------------------------------------------------------------
+
 
 def _canonical_item(item: str, allowed: list[dict]) -> dict | None:
     item_n = _norm(item)
@@ -405,11 +440,17 @@ def _canonical_item(item: str, allowed: list[dict]) -> dict | None:
     return best
 
 
-def _held_quantity(tickets: list[dict], employee_id: str, eq: dict, allowed: list[dict]) -> int:
+def _held_quantity(
+    tickets: list[dict], employee_id: str, eq: dict, allowed: list[dict]
+) -> int:
     """이미 지급됐거나 처리 중인 동일 품목 수량 (반려 제외)."""
     total = 0
     for t in tickets:
-        if t["employee_id"] != employee_id or t.get("type") != "비품" or t.get("status") == "반려":
+        if (
+            t["employee_id"] != employee_id
+            or t.get("type") != "비품"
+            or t.get("status") == "반려"
+        ):
             continue
         held = _canonical_item(t["item"], allowed)
         if held and held["item"] == eq["item"]:
@@ -418,6 +459,7 @@ def _held_quantity(tickets: list[dict], employee_id: str, eq: dict, allowed: lis
 
 
 @mcp.tool
+@_storage_safe
 def create_support_ticket(
     item: str,
     company_id: str,
@@ -450,172 +492,272 @@ def create_support_ticket(
     if quantity < 1:
         return fail("INVALID_INPUT", MSG["INVALID_QUANTITY"])
 
-    request_type = "계정" if str(request_type).strip() in {"계정", "account"} else "비품"
+    request_type = (
+        "계정" if str(request_type).strip() in {"계정", "account"} else "비품"
+    )
 
-    with _write_lock:
-        doc = load(company_id, "tickets")
-        rule = doc.get("creation_rule", {})
-        tickets = doc["tickets"]
-        allowed = doc.get("allowed_equipment", [])
-        warnings: list[str] = []
-        policy_reference = None
+    doc = load(company_id, "tickets")
+    rule = doc.get("creation_rule", {})
+    allowed = doc.get("allowed_equipment", [])
+    policy_reference = None
+    limit = None
 
-        if request_type == "비품":
-            eq = _canonical_item(item, allowed)
-            if not eq:
-                return fail("REJECTED", rule.get("unknown_equipment_message", MSG["DENIED_OR_NOT_FOUND"]),
-                            {"item": item, "reason": "UNKNOWN_EQUIPMENT",
-                             "allowed_items": [e["item"] for e in allowed]})
-            item_name = eq["item"]
-            policy_reference = eq.get("policy_reference")
-            limit = eq.get("max_quantity_per_employee")
-            if eq.get("quantity_limit_defined") and limit is not None:
-                held = _held_quantity(tickets, me["employee_id"], eq, allowed)
-                if held + quantity > limit:
-                    return fail("REJECTED", rule.get("excess_quantity_message", MSG["DENIED_OR_NOT_FOUND"]),
-                                {"item": item_name, "reason": "EXCESS_QUANTITY",
-                                 "limit": limit, "already_held_or_pending": held, "requested": quantity})
-        else:
-            item_name = item.strip()
-            if quantity != 1:
-                return fail("REJECTED", "업무 계정은 서비스별 1인 1계정만 신청할 수 있습니다.",
-                            {"item": item_name, "reason": "ACCOUNT_QUANTITY"})
+    if request_type == "비품":
+        equipment = _canonical_item(item, allowed)
+        if not equipment:
+            return fail(
+                "REJECTED",
+                rule.get("unknown_equipment_message", MSG["DENIED_OR_NOT_FOUND"]),
+                {
+                    "item": item,
+                    "reason": "UNKNOWN_EQUIPMENT",
+                    "allowed_items": [entry["item"] for entry in allowed],
+                },
+            )
+        item_name = equipment["item"]
+        policy_reference = equipment.get("policy_reference")
+        limit = equipment.get("max_quantity_per_employee")
+    else:
+        item_name = item.strip()
+        if quantity != 1:
+            return fail(
+                "REJECTED",
+                "업무 계정은 서비스별 1인 1계정만 신청할 수 있습니다.",
+                {"item": item_name, "reason": "ACCOUNT_QUANTITY"},
+            )
 
-        pending_same = [t for t in tickets
-                        if t["employee_id"] == me["employee_id"]
-                        and _norm(t["item"]) == _norm(item_name)
-                        and t.get("status") in {"접수완료", "검토중"}]
+    purpose_text = purpose.strip() or "업무용 (사용 목적 미기재)"
+
+    def validate_quantity(existing_tickets: list[dict]) -> dict | None:
+        if (
+            request_type == "비품"
+            and equipment.get("quantity_limit_defined")
+            and limit is not None
+        ):
+            held = _held_quantity(
+                existing_tickets, me["employee_id"], equipment, allowed
+            )
+            if held + quantity > limit:
+                return fail(
+                    "REJECTED",
+                    rule.get("excess_quantity_message", MSG["DENIED_OR_NOT_FOUND"]),
+                    {
+                        "item": item_name,
+                        "reason": "EXCESS_QUANTITY",
+                        "limit": limit,
+                        "already_held_or_pending": held,
+                        "requested": quantity,
+                    },
+                )
+        return None
+
+    if not confirmed:
+        existing_tickets = doc["tickets"]
+        rejected = validate_quantity(existing_tickets)
+        if rejected is not None:
+            return rejected
+        pending_same = [
+            ticket
+            for ticket in existing_tickets
+            if ticket["employee_id"] == me["employee_id"]
+            and _norm(ticket["item"]) == _norm(item_name)
+            and ticket.get("status") in {"접수완료", "검토중"}
+        ]
+        warnings = []
         if pending_same:
-            ids = ", ".join(t["ticket_id"] for t in pending_same)
-            warnings.append(f"이미 처리 중인 동일 품목 신청이 있습니다({ids}). 추가 신청이 맞는지 확인해 주세요.")
-
+            ids = ", ".join(ticket["ticket_id"] for ticket in pending_same)
+            warnings.append(
+                f"이미 처리 중인 동일 품목 신청이 있습니다({ids}). 추가 신청이 맞는지 확인해 주세요."
+            )
         preview = {
             "employee_id": me["employee_id"],
             "employee_name": me["name"],
             "type": request_type,
             "item": item_name,
             "quantity": quantity,
-            "purpose": purpose.strip() or "업무용 (사용 목적 미기재)",
+            "purpose": purpose_text,
             "policy_reference": policy_reference,
             "warnings": warnings,
         }
-        if not confirmed:
-            return ok("NEEDS_CONFIRMATION", {"preview": preview}, MSG["NEEDS_CONFIRMATION"])
+        return ok("NEEDS_CONFIRMATION", {"preview": preview}, MSG["NEEDS_CONFIRMATION"])
 
-        # 같은 신청이 짧은 시간 안에 다시 들어오면(버튼 연타 등) 기존 티켓을 돌려준다
-        now = datetime.now(KST)
-        for t in reversed(tickets):
-            if (t["employee_id"] == me["employee_id"] and t["item"] == item_name
-                    and int(t.get("quantity", 1)) == quantity):
-                try:
-                    created = datetime.fromisoformat(t["created_at"])
-                except (KeyError, ValueError):
-                    break
-                if (now - created).total_seconds() < DUPLICATE_WINDOW_SEC:
-                    return ok("DUPLICATE_IGNORED", {"ticket": t}, f"이미 접수된 신청입니다. 티켓 번호: {t['ticket_id']}")
-                break
-
-        seq = int(doc.get("next_sequence", len(tickets) + 1))
-        existing_ids = {t["ticket_id"] for t in tickets}
-        while (ticket_id := f"REQ-{seq:03d}") in existing_ids:
-            seq += 1
-        ticket = {
-            "ticket_id": ticket_id,
-            "employee_id": me["employee_id"],
-            "type": request_type,
-            "item": item_name,
-            "quantity": quantity,
-            "purpose": preview["purpose"],
-            "status": rule.get("initial_status", "접수완료"),
-            "created_at": now.isoformat(timespec="seconds"),
-        }
-        new_doc = dict(doc)
-        new_doc["tickets"] = [*tickets, ticket]
-        new_doc["next_sequence"] = seq + 1
-        save(company_id, "tickets", new_doc)
-
-    return ok("CREATED", {"ticket": ticket},
-              f"신청이 접수되었습니다. 티켓 번호: {ticket_id} ({item_name} {quantity}개, 상태: {ticket['status']})")
+    now = datetime.now(KST)
+    outcome = storage.create_ticket_atomic(
+        company_id=company_id,
+        employee_id=me["employee_id"],
+        request_type=request_type,
+        item=item_name,
+        quantity=quantity,
+        purpose=purpose_text,
+        initial_status=rule.get("initial_status", "접수완료"),
+        now=now,
+        duplicate_window_seconds=DUPLICATE_WINDOW_SEC,
+        validate_existing=validate_quantity,
+    )
+    if outcome["kind"] == "rejected":
+        return outcome["result"]
+    ticket = outcome["ticket"]
+    if outcome["kind"] == "duplicate":
+        return ok(
+            "DUPLICATE_IGNORED",
+            {"ticket": ticket},
+            f"이미 접수된 신청입니다. 티켓 번호: {ticket['ticket_id']}",
+        )
+    return ok(
+        "CREATED",
+        {"ticket": ticket},
+        f"신청이 접수되었습니다. 티켓 번호: {ticket['ticket_id']} ({item_name} {quantity}개, 상태: {ticket['status']})",
+    )
 
 
 # ---------------------------------------------------------------------------
 # UI 전용 툴 (LLM에게는 노출하지 않음 — agent.py의 LLM_TOOLS 참고)
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool
+@_storage_safe
 def ui_list_companies() -> dict:
     """[UI 전용] 회사 선택 드롭다운용 목록."""
-    companies = []
-    for cid in list_company_ids():
-        emp = load(cid, "employees")
-        companies.append({"company_id": cid, "company_name": emp.get("company_name", cid)})
-    return ok(data={"companies": companies})
+    return ok(data={"companies": storage.list_companies()})
 
 
 @mcp.tool
+@_storage_safe
 def ui_list_employees(company_id: str) -> dict:
     """[UI 전용] 사번 선택 드롭다운용 목록."""
     try:
         employees = load(company_id, "employees")["employees"]
-    except (KeyError, FileNotFoundError):
+    except KeyError:
         return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
-    return ok(data={"employees": [{
-        "employee_id": e["employee_id"],
-        "name": e["name"],
-        "department": e["department"],
-        "position": e.get("position"),
-        "label": f"{e['employee_id']} {e['name']} / {e['department']}",
-    } for e in employees]})
+    return ok(
+        data={
+            "employees": [
+                {
+                    "employee_id": e["employee_id"],
+                    "name": e["name"],
+                    "department": e["department"],
+                    "position": e.get("position"),
+                    "onboarding_week": e.get("onboarding_week"),
+                    "label": f"{e['employee_id']} {e['name']} / {e['department']}",
+                }
+                for e in employees
+            ]
+        }
+    )
 
 
 @mcp.tool
+@_storage_safe
 def ui_get_sidebar(company_id: str, employee_id: str) -> dict:
     """[UI 전용] 우측 사이드바: 잔여 연차 + 본인 신청 현황판(최신순)."""
     me, err = resolve_session(company_id, employee_id)
     if err:
         return err
-    tickets = [t for t in load(company_id, "tickets")["tickets"] if t["employee_id"] == employee_id]
+    tickets = storage.get_tickets(company_id, employee_id)
     tickets.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     leave = me.get("annual_leave", {})
-    return ok(data={
-        "employee": {"employee_id": me["employee_id"], "name": me["name"],
-                     "department": me["department"], "position": me.get("position")},
-        "annual_leave": {"remaining_days": leave.get("remaining_days"),
-                         "granted_days": leave.get("granted_days"),
-                         "used_days": leave.get("used_days"),
-                         "as_of": leave.get("as_of")},
-        "tickets": [{k: t.get(k) for k in
-                     ("ticket_id", "type", "item", "quantity", "purpose", "status", "created_at")}
-                    for t in tickets],
-    })
+    return ok(
+        data={
+            "employee": {
+                "employee_id": me["employee_id"],
+                "name": me["name"],
+                "department": me["department"],
+                "position": me.get("position"),
+            },
+            "annual_leave": {
+                "remaining_days": leave.get("remaining_days"),
+                "granted_days": leave.get("granted_days"),
+                "used_days": leave.get("used_days"),
+                "as_of": leave.get("as_of"),
+            },
+            "tickets": [
+                {
+                    k: t.get(k)
+                    for k in (
+                        "ticket_id",
+                        "type",
+                        "item",
+                        "quantity",
+                        "purpose",
+                        "status",
+                        "created_at",
+                    )
+                }
+                for t in tickets
+            ],
+        }
+    )
 
 
 @mcp.tool
-def ui_confirm_ticket(company_id: str, employee_id: str, item: str, quantity: int = 1,
-                      purpose: str = "", request_type: str = "비품") -> dict:
+@_storage_safe
+def ui_confirm_ticket(
+    company_id: str,
+    employee_id: str,
+    item: str,
+    quantity: int = 1,
+    purpose: str = "",
+    request_type: str = "비품",
+) -> dict:
     """[UI 전용] 사용자가 '접수 확정'을 눌렀을 때 티켓을 실제로 생성한다."""
-    return create_support_ticket(item=item, company_id=company_id, employee_id=employee_id,
-                                 quantity=quantity, purpose=purpose,
-                                 request_type=request_type, confirmed=True)
+    return create_support_ticket(
+        item=item,
+        company_id=company_id,
+        employee_id=employee_id,
+        quantity=quantity,
+        purpose=purpose,
+        request_type=request_type,
+        confirmed=True,
+    )
 
 
 # ---------------------------------------------------------------------------
 # 실행
 # ---------------------------------------------------------------------------
 
-def reset_tickets() -> None:
-    for cid in list_company_ids():
-        seed = SEED_ROOT / cid / "tickets.json"
-        if seed.is_file():
-            shutil.copyfile(seed, DATA_ROOT / cid / "tickets.json")
-            print(f"[reset] {cid}/tickets.json ← seed")
+
+RESET_MOVED_MESSAGE = (
+    "티켓 초기화는 가져오기 스크립트로 옮겨졌습니다. 다음 명령을 사용하세요:\n"
+    "  python scripts/import_company.py --all --reset-tickets"
+)
+EMPTY_DB_MESSAGE = (
+    "DB에 회사 데이터가 없습니다. python scripts/import_company.py --all을 먼저 실행하세요."
+)
+
+
+def prepare_database() -> bool:
+    """서버 시작 시 테이블을 만들고, 비어 있으면 가져오기 안내를 남긴다."""
+    try:
+        storage.init_db()
+        if not storage.has_companies():
+            log.warning(EMPTY_DB_MESSAGE)
+            return False
+    except storage.StorageUnavailable:
+        log.warning("DB에 연결하지 못했습니다. 툴은 SERVER_UNAVAILABLE을 반환합니다.")
+        return False
+    return True
+
+
+def configure_logging() -> None:
+    # stdio MCP는 stdout을 프로토콜에 쓰므로 로그는 stderr로만 보낸다.
+    level = os.environ.get("OFFICEGENIE_LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, level, logging.INFO),
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reset-tickets", action="store_true", help="시연용 티켓 데이터를 seed로 복구")
+    parser.add_argument(
+        "--reset-tickets", action="store_true", help=argparse.SUPPRESS
+    )
     args = parser.parse_args()
     if args.reset_tickets:
-        reset_tickets()
-    else:
-        mcp.run(show_banner=False)  # stdio
+        print(RESET_MOVED_MESSAGE, file=sys.stderr)
+        raise SystemExit(2)
+    configure_logging()
+    prepare_database()
+    mcp.run(show_banner=False)  # stdio

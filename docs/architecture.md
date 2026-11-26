@@ -12,7 +12,9 @@ flowchart LR
     AG <==>|MCP · stdio| SV[MCP 툴<br/>mcp_server.py]
     A([🤖 AI 앱 사용자]) -->|"MCP · HTTP + 토큰"| RS[원격 서버<br/>remote_server.py]
     RS --> SV
-    SV --> D[(data/회사별 JSON)]
+    SV --> ST[저장소<br/>storage.py]
+    ST --> DB[(PostgreSQL · Neon<br/>또는 로컬 SQLite)]
+    D[(data/회사별 JSON)] -.->|"가져오기<br/>scripts/import_company.py"| ST
 ```
 
 | 계층 | 파일 | 역할 |
@@ -21,7 +23,12 @@ flowchart LR
 | 에이전트 | `agent.py` | LLM 툴 호출 루프, 세션 값 주입, 입력 검증, 장애 대응 |
 | MCP 툴 | `mcp_server.py` | 툴 5개 + UI 전용 툴 4개, 권한 · 비품 규칙 검증, 티켓 저장 |
 | 원격 서버 | `remote_server.py` | HTTP MCP 엔드포인트, 토큰 인증, 안내 홈페이지 |
-| 데이터 | `data/<company_id>/` | 회사별 표준 JSON 5종 |
+| 저장소 | `storage.py` | SQLAlchemy Core로 DB 접근. 회사별 60초 캐시(`data_version` 확인), 티켓 발급 트랜잭션, 연결 재시도 |
+| DB | PostgreSQL(Neon) / SQLite | `DATABASE_URL`이 없으면 로컬 `officegenie.db` |
+| 가져오기 | `scripts/import_company.py` | JSON 검증 후 회사 단위로 DB 교체. JSON을 읽는 유일한 곳 |
+| 원본 데이터 | `data/<company_id>/`, `seed/` | 회사별 표준 JSON 5종, 시연 초기화용 티켓 |
+
+서버는 실행 중에 JSON을 읽거나 쓰지 않습니다. 테이블은 `companies`, `employees`(비밀번호 없음), `policies`, `search_config`, `locations`, `unregistered_places`, `handovers`, `equipment_rules`, `ticket_rules`, `tickets`이며 모두 `company_id`로 회사를 구분합니다. 티켓 생성은 번호 할당 · 10초 중복 방지 · 수량 검사 · 저장 · 번호 증가를 트랜잭션 하나로 처리합니다(PostgreSQL은 회사 행 잠금, SQLite는 `BEGIN IMMEDIATE`). 그래서 웹 화면과 원격 서버가 동시에 신청해도 번호가 겹치지 않습니다.
 
 웹 화면은 stdio 방식이라 `streamlit run app.py` 하나로 UI, 에이전트, MCP 툴이 함께 뜹니다. 원격 서버는 같은 툴 함수를 그대로 쓰고, 신원만 토큰에서 가져옵니다. 그래서 툴 동작을 고치면 두 입구에 똑같이 반영됩니다.
 
@@ -57,7 +64,7 @@ UI 개발자용 연동 규격은 [ui_contract.md](ui_contract.md)에 있습니�
 
 ## 🏢 다른 회사에 적용하기
 
-`data/` 아래에 회사 폴더를 하나 추가하면 됩니다. 코드는 건드리지 않습니다.
+`data/` 아래에 회사 폴더를 하나 추가하고 DB로 가져오면 됩니다. 코드는 건드리지 않습니다.
 
 ```text
 data/
@@ -67,6 +74,12 @@ data/
     ├── locations.json   # 장소 (건물, 층, 구역, 별칭), 미등록 장소 목록
     ├── handovers.json   # 부서별 인수인계서 (핵심 업무, 사용 툴, 1주 차 할 일)
     └── tickets.json     # 신청 내역, 허용 비품 목록, 1인 수량 한도, 안내 문구
+```
+
+폴더를 만든 뒤 가져오기를 실행합니다. 모든 JSON을 먼저 검사하고, 오류가 있으면 파일명과 항목 번호를 알려 주고 DB는 바꾸지 않습니다. `employees.json`의 `password`는 DB에 저장하지 않고, `position`은 없어도 됩니다.
+
+```bash
+python scripts/import_company.py data/your-company
 ```
 
 포함된 가상 회사 두 곳이 같은 구조의 예시입니다.
@@ -89,14 +102,16 @@ officegenie/
 ├── agent.py               # LLM ↔ MCP 에이전트
 ├── mcp_server.py          # MCP 툴 (stdio)
 ├── remote_server.py       # 원격 MCP 서버 (HTTP + 홈페이지 + 토큰 인증)
-├── data/                  # 회사별 JSON 5종
+├── storage.py             # DB 저장소 (SQLAlchemy Core, PostgreSQL/SQLite)
+├── data/                  # 회사별 JSON 5종 (가져오기 원본)
 ├── seed/                  # 시연 초기화용 tickets.json 원본
 ├── assets/                # 로고
 ├── docs/                  # 가이드 문서, UI 연동 규격, 화면 캡처
 ├── scripts/
+│   ├── import_company.py  # JSON 검증 → DB 가져오기, 티켓 초기화
 │   ├── cli_chat.py        # 터미널 테스트 채팅
 │   └── issue_token.py     # 원격 서버 개인 토큰 발급 · 목록 · 폐기
-├── tests/                 # pytest 51개 (API 키 없이 실행)
+├── tests/                 # pytest 73개 (API 키 없이 실행, 임시 SQLite)
 └── requirements.txt
 ```
 
@@ -106,14 +121,15 @@ officegenie/
 python -m pytest -q
 ```
 
-API 키 없이 실행되며, 원본 `data/`는 임시 폴더에 복사해서 테스트하므로 바뀌지 않습니다.
+API 키 없이 실행됩니다. 테스트마다 임시 SQLite에 `data/`를 가져오고 티켓을 seed로 초기화하므로 원본 `data/` · `seed/`는 바뀌지 않습니다. 운영 DB(`DATABASE_URL`)에는 절대 연결하지 않으며, `TEST_DATABASE_URL`이 있으면 DB를 쓰는 테스트(툴 · 에이전트 · 저장소)를 PostgreSQL 임시 스키마에서도 한 번 더 돌립니다(이때 총 134회 실행).
 
 | 파일 | 개수 | 검증 내용 |
 |---|---|---|
 | `test_tools.py` | 29 | 규정 검색, 장소, 인수인계서, 권한 차단, 비품 화이트리스트 · 수량 한도, 다기업 |
 | `test_agent.py` | 13 | 실제 MCP 서버 + 가짜 LLM: 사번 위조 무시, 확인 절차, 입력 검증, 장애 대응 |
 | `test_jitda_llm.py` | 5 | Jitda API 연동 형식, 키 비노출 (외부 요청 없음) |
-| `test_remote.py` | 4 | 원격 서버: 잘못된 토큰 거부, 토큰별 신원 분리, 2단계 신청 |
+| `test_remote.py` | 5 | 원격 서버(별도 임시 SQLite): 잘못된 토큰 거부, 토큰별 신원 분리, 2단계 신청, 웹·원격 프로세스 동시 발급 시 번호 중복 없음 |
+| `test_storage.py` | 21 | DB 가져오기 · 재가져오기 티켓 유지 · `--reset-tickets` 번호 · 삭제 반영 · 실패 시 롤백 · 오류 위치 · 비밀번호 미저장 · 캐시 · 동시 발급 · 로그에 주소 미노출 |
 
 ---
 

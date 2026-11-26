@@ -13,6 +13,7 @@
   "employees": [
     {
       "employee_id": "EMP001",
+      "password": "2325",
       "name": "이하준",
       "department": "백엔드개발팀",
       "job_title": "주니어 백엔드 개발자",
@@ -31,6 +32,7 @@
     },
     {
       "employee_id": "EMP002",
+      "password": "6283",
       "name": "정유진",
       "department": "재무회계팀",
       "job_title": "재무회계 담당자",
@@ -49,6 +51,7 @@
     },
     {
       "employee_id": "EMP003",
+      "password": "4874",
       "name": "강도현",
       "department": "백엔드개발팀",
       "job_title": "백엔드 개발자",
@@ -67,6 +70,7 @@
     },
     {
       "employee_id": "EMP004",
+      "password": "8544",
       "name": "권서아",
       "department": "백엔드개발팀",
       "job_title": "선임 백엔드 개발자",
@@ -85,6 +89,7 @@
     },
     {
       "employee_id": "EMP005",
+      "password": "5026",
       "name": "박지호",
       "department": "백엔드개발팀",
       "job_title": "백엔드 개발자",
@@ -103,6 +108,7 @@
     },
     {
       "employee_id": "EMP006",
+      "password": "4756",
       "name": "송민서",
       "department": "프론트엔드개발팀",
       "job_title": "프론트엔드 개발자",
@@ -121,6 +127,7 @@
     },
     {
       "employee_id": "EMP007",
+      "password": "9935",
       "name": "최서준",
       "department": "프론트엔드개발팀",
       "job_title": "프론트엔드 개발팀장",
@@ -139,6 +146,7 @@
     },
     {
       "employee_id": "EMP008",
+      "password": "0408",
       "name": "윤하은",
       "department": "프론트엔드개발팀",
       "job_title": "UI 개발자",
@@ -157,6 +165,7 @@
     },
     {
       "employee_id": "EMP009",
+      "password": "5016",
       "name": "오지훈",
       "department": "서비스기획팀",
       "job_title": "서비스 기획팀장",
@@ -175,6 +184,7 @@
     },
     {
       "employee_id": "EMP010",
+      "password": "8487",
       "name": "백예린",
       "department": "서비스기획팀",
       "job_title": "서비스 기획자",
@@ -193,6 +203,7 @@
     },
     {
       "employee_id": "EMP011",
+      "password": "8654",
       "name": "남도윤",
       "department": "서비스기획팀",
       "job_title": "프로덕트 매니저",
@@ -211,6 +222,7 @@
     },
     {
       "employee_id": "EMP012",
+      "password": "2384",
       "name": "신채린",
       "department": "디자인팀",
       "job_title": "UX/UI 디자이너",
@@ -229,6 +241,7 @@
     },
     {
       "employee_id": "EMP013",
+      "password": "5368",
       "name": "류태민",
       "department": "디자인팀",
       "job_title": "디자인팀장",
@@ -247,6 +260,7 @@
     },
     {
       "employee_id": "EMP014",
+      "password": "4241",
       "name": "장하영",
       "department": "인사총무팀",
       "job_title": "인사총무 담당자",
@@ -265,6 +279,7 @@
     },
     {
       "employee_id": "EMP015",
+      "password": "4000",
       "name": "한승우",
       "department": "인사총무팀",
       "job_title": "인사총무 팀장",
@@ -283,6 +298,7 @@
     },
     {
       "employee_id": "EMP016",
+      "password": "7649",
       "name": "조수아",
       "department": "재무회계팀",
       "job_title": "회계 담당자",
@@ -301,6 +317,7 @@
     },
     {
       "employee_id": "EMP017",
+      "password": "7138",
       "name": "서현석",
       "department": "재무회계팀",
       "job_title": "재무회계 팀장",
@@ -319,6 +336,7 @@
     },
     {
       "employee_id": "EMP018",
+      "password": "9314",
       "name": "문가은",
       "department": "QA팀",
       "job_title": "QA 엔지니어",
@@ -337,6 +355,7 @@
     },
     {
       "employee_id": "EMP019",
+      "password": "4476",
       "name": "배민준",
       "department": "QA팀",
       "job_title": "QA팀장",
@@ -355,6 +374,7 @@
     },
     {
       "employee_id": "EMP020",
+      "password": "0724",
       "name": "김재윤",
       "department": "백엔드개발팀",
       "job_title": "백엔드 개발팀장",
@@ -373,6 +393,7 @@
     },
     {
       "employee_id": "EMP021",
+      "password": "4681",
       "name": "박시우",
       "department": "백엔드개발팀",
       "job_title": "데이터 파이프라인 개발자",
@@ -391,6 +412,7 @@
     },
     {
       "employee_id": "EMP022",
+      "password": "1340",
       "name": "조하은",
       "department": "프론트엔드개발팀",
       "job_title": "Vue 프론트엔드 개발자",
@@ -409,6 +431,7 @@
     },
     {
       "employee_id": "EMP023",
+      "password": "7168",
       "name": "류도현",
       "department": "QA팀",
       "job_title": "데이터 품질 엔지니어",
@@ -427,6 +450,7 @@
     },
     {
       "employee_id": "EMP024",
+      "password": "0207",
       "name": "이채린",
       "department": "서비스기획팀",
       "job_title": "B2B 서비스 기획자",
@@ -445,6 +469,7 @@
     },
     {
       "employee_id": "EMP025",
+      "password": "6100",
       "name": "김태오",
       "department": "백엔드개발팀",
       "job_title": "이벤트 처리 개발자",
@@ -463,6 +488,7 @@
     },
     {
       "employee_id": "EMP026",
+      "password": "8758",
       "name": "남지우",
       "department": "디자인팀",
       "job_title": "데이터 시각화 디자이너",
@@ -481,6 +507,7 @@
     },
     {
       "employee_id": "EMP027",
+      "password": "7313",
       "name": "문서진",
       "department": "프론트엔드개발팀",
       "job_title": "대시보드 개발자",
@@ -499,6 +526,7 @@
     },
     {
       "employee_id": "EMP028",
+      "password": "6662",
       "name": "고민준",
       "department": "인사총무팀",
       "job_title": "인사 운영 담당자",
@@ -517,6 +545,7 @@
     },
     {
       "employee_id": "EMP029",
+      "password": "8680",
       "name": "도예원",
       "department": "재무회계팀",
       "job_title": "클라우드 비용 담당자",
@@ -535,6 +564,7 @@
     },
     {
       "employee_id": "EMP030",
+      "password": "2610",
       "name": "차윤재",
       "department": "백엔드개발팀",
       "job_title": "플랫폼 개발자",
@@ -553,6 +583,7 @@
     },
     {
       "employee_id": "EMP031",
+      "password": "1877",
       "name": "진유나",
       "department": "QA팀",
       "job_title": "자동화 테스트 엔지니어",
@@ -571,6 +602,7 @@
     },
     {
       "employee_id": "EMP032",
+      "password": "8026",
       "name": "황민서",
       "department": "서비스기획팀",
       "job_title": "고객 요구사항 분석가",
@@ -589,6 +621,7 @@
     },
     {
       "employee_id": "EMP033",
+      "password": "7556",
       "name": "서준서",
       "department": "프론트엔드개발팀",
       "job_title": "주니어 웹 개발자",
@@ -607,6 +640,7 @@
     },
     {
       "employee_id": "EMP034",
+      "password": "4223",
       "name": "유수아",
       "department": "백엔드개발팀",
       "job_title": "주니어 데이터 엔지니어",
@@ -625,6 +659,7 @@
     },
     {
       "employee_id": "EMP035",
+      "password": "9850",
       "name": "하진우",
       "department": "재무회계팀",
       "job_title": "프로젝트 예산 담당자",
@@ -643,6 +678,7 @@
     },
     {
       "employee_id": "EMP036",
+      "password": "7059",
       "name": "백하린",
       "department": "디자인팀",
       "job_title": "프로덕트 디자이너",
@@ -661,6 +697,7 @@
     },
     {
       "employee_id": "EMP037",
+      "password": "0604",
       "name": "안지민",
       "department": "서비스기획팀",
       "job_title": "서비스 운영 기획자",
@@ -679,6 +716,7 @@
     },
     {
       "employee_id": "EMP038",
+      "password": "5198",
       "name": "신도윤",
       "department": "인사총무팀",
       "job_title": "자산 관리 담당자",
@@ -697,6 +735,7 @@
     },
     {
       "employee_id": "EMP039",
+      "password": "8538",
       "name": "송아린",
       "department": "QA팀",
       "job_title": "테스트 분석가",
@@ -715,6 +754,7 @@
     },
     {
       "employee_id": "EMP040",
+      "password": "7791",
       "name": "최은호",
       "department": "백엔드개발팀",
       "job_title": "백엔드 서비스 개발자",
