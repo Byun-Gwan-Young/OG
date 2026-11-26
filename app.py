@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import math
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -189,7 +190,24 @@ def _equipment_status(status: str) -> tuple[str, str]:
     return "접수 완료", "received"
 
 
-def _render_dashboard(employee: dict, tickets: list[dict]) -> None:
+def _remaining_leave_value(value: object) -> str:
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ):
+        return (
+            "<div class='leave-value'>"
+            f"<span class='leave-number'>{_escape(format(value, 'g'))}</span>"
+            "<span class='leave-unit'>일</span>"
+            "</div>"
+        )
+    return "<div class='leave-value leave-value-unavailable'>확인 불가</div>"
+
+
+def _render_dashboard(
+    employee: dict, tickets: list[dict], remaining_leave: object = None
+) -> None:
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     weekdays = ("월", "화", "수", "목", "금", "토", "일")
     date_label = f"{now.month}월 {now.day}일 {weekdays[now.weekday()]}요일"
@@ -265,6 +283,10 @@ def _render_dashboard(employee: dict, tickets: list[dict]) -> None:
             <span class="eyebrow">내 정보</span>
             <h2>{name}</h2>
             <div class="profile-meta"><span>{department}</span><i></i><span>{position}</span></div>
+          </div>
+          <div class="leave-summary">
+            <span class="eyebrow">잔여 연차</span>
+            {_remaining_leave_value(remaining_leave)}
           </div>
           <span class="new-employee-badge">신입사원</span>
         </div>
@@ -606,6 +628,7 @@ def _render_styles() -> None:
             box-shadow: 0 1px 3px rgba(32, 45, 64, 0.018);
         }
         .profile-card {
+            position: relative;
             height: 184px;
             display: flex;
             align-items: center;
@@ -635,6 +658,36 @@ def _render_styles() -> None:
         }
         .profile-meta { display: flex; align-items: center; gap: 16px; color: #71819A; font-size: 15px; }
         .profile-meta i { width: 1px; height: 17px; background: var(--line); }
+        .leave-summary {
+            position: absolute;
+            left: 62%;
+            top: 43px;
+            min-width: 120px;
+            text-align: left;
+        }
+        .leave-value {
+            display: flex;
+            align-items: baseline;
+            gap: 2px;
+            margin-top: 6px;
+            color: var(--blue);
+            white-space: nowrap;
+        }
+        .leave-number {
+            color: var(--blue);
+            font-size: 32px;
+            font-weight: 720;
+            line-height: 1.28;
+            letter-spacing: -0.8px;
+        }
+        .leave-unit { color: var(--blue); font-size: 18px; font-weight: 620; line-height: 1.3; }
+        .leave-value-unavailable {
+            display: block;
+            color: var(--muted);
+            font-size: 15px;
+            font-weight: 550;
+            line-height: 1.8;
+        }
         .new-employee-badge {
             align-self: flex-start;
             margin: 1px 0 0 auto;
@@ -1196,7 +1249,12 @@ def _render_styles() -> None:
             .employee-placeholder svg { width: 48px; height: 48px; }
             .profile-copy h2 { font-size: 25px; }
             .profile-meta { flex-wrap: wrap; gap: 8px; font-size: 13px; }
-            .new-employee-badge { position: absolute; right: 26px; margin: 0; padding: 5px 10px; font-size: 11px; }
+            .leave-summary { left: auto; right: 20px; top: 60px; min-width: 0; }
+            .leave-summary .eyebrow { font-size: 12px; }
+            .leave-number { font-size: 24px; }
+            .leave-unit { font-size: 15px; }
+            .leave-value-unavailable { font-size: 12px; }
+            .new-employee-badge { position: absolute; top: 14px; right: 20px; margin: 0; padding: 5px 10px; font-size: 11px; }
             .dashboard-grid { grid-template-columns: 1fr; gap: 14px; }
             .dashboard-card { min-height: auto; padding: 20px 18px 16px; }
             .notice-row, .equipment-row { min-height: 58px; font-size: 13px; }
@@ -1261,12 +1319,15 @@ def main() -> None:
         sidebar_data = sidebar_result.get("data", {})
         dashboard_employee = sidebar_data.get("employee", employee)
         tickets = sidebar_data.get("tickets", [])
+        annual_leave = sidebar_data.get("annual_leave") or {}
+        remaining_leave = annual_leave.get("remaining_days")
     else:
         dashboard_employee = employee
         tickets = []
+        remaining_leave = None
 
     with st.container(key="dashboard_root"):
-        _render_dashboard(dashboard_employee, tickets)
+        _render_dashboard(dashboard_employee, tickets, remaining_leave)
 
     with st.container(key="chat_fab"):
         st.button(
