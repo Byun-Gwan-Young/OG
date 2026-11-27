@@ -293,6 +293,21 @@ login_sessions = Table(
     Column("expires_at", String(40), nullable=False),
 )
 
+# 원격 MCP 접속 토큰(사원 개인용). 원문은 발급 때 한 번만 보여 주고 DB에는 SHA-256 해시만 둔다.
+# 폐기는 행을 지우지 않고 revoked_at을 채운다(감사·현황 표시용). 검증은 요청마다 DB를 조회한다.
+mcp_tokens = Table(
+    "mcp_tokens",
+    metadata,
+    Column("token_hash", String(64), primary_key=True),
+    Column("company_id", String(100), nullable=False),
+    Column("employee_id", String(100), nullable=False),
+    Column("label", String(100), nullable=False),
+    Column("issued_at", String(40), nullable=False),
+    Column("last_used_at", String(40)),
+    Column("revoked_at", String(40)),
+    Index("ix_mcp_tokens_owner", "company_id", "employee_id"),
+)
+
 _STATIC_TABLES = (
     policies,
     employees,
@@ -319,6 +334,38 @@ _roundtrip_count: contextvars.ContextVar[int | None] = contextvars.ContextVar(
 
 class VersionConflict(RuntimeError):
     """The company data changed after the caller read it (optimistic lock)."""
+
+
+class ConfigurationError(RuntimeError):
+    """Deployment misconfiguration that must stop the process at startup."""
+
+
+PRODUCTION_ENV_VALUES = {"production", "prod"}
+
+
+def is_production() -> bool:
+    return os.environ.get("OFFICEGENIE_ENV", "").strip().lower() in PRODUCTION_ENV_VALUES
+
+
+def check_runtime_config() -> None:
+    """운영(OFFICEGENIE_ENV=production)에서는 DATABASE_URL이 반드시 있어야 한다.
+
+    Render 무료 서비스는 재시작·잠들 때 서버 안 파일이 사라지므로 로컬 SQLite로 넘어가면
+    데이터가 조용히 사라진다. 그래서 시작 단계에서 멈춘다. 테스트 실행은 검사하지 않는다.
+    """
+    if os.environ.get("OFFICEGENIE_TESTING") == "1" or not is_production():
+        return
+    value = os.environ.get("DATABASE_URL", "").strip()
+    if not value:
+        raise ConfigurationError(
+            "OFFICEGENIE_ENV=production인데 DATABASE_URL이 없습니다. "
+            "운영에서는 로컬 SQLite를 쓰지 않습니다. DATABASE_URL을 설정하세요."
+        )
+    url = normalize_database_url(value)
+    if url.get_backend_name() == "sqlite":
+        raise ConfigurationError(
+            "OFFICEGENIE_ENV=production에서는 SQLite를 쓸 수 없습니다. PostgreSQL 주소를 설정하세요."
+        )
 
 
 class StorageUnavailable(RuntimeError):
@@ -367,6 +414,7 @@ def database_url_from_environment() -> URL:
         return normalize_database_url(value)
 
     load_dotenv(BASE_DIR / ".env")
+    check_runtime_config()
     value = os.environ.get("DATABASE_URL", "").strip()
     if value:
         return normalize_database_url(value)
@@ -422,6 +470,8 @@ def get_engine() -> Engine:
             try:
                 url = database_url_from_environment()
                 _engine = _build_engine(url, os.environ.get("OFFICEGENIE_TEST_SCHEMA"))
+            except ConfigurationError:
+                raise
             except Exception as exc:
                 # 예외 메시지에는 주소가 들어 있을 수 있으므로 종류만 남긴다.
                 log.error("DB 엔진 설정 실패 (%s)", type(exc).__name__)
@@ -2478,6 +2528,205 @@ def revoke_account_sessions(company_id: str, account_id: str) -> None:
     _run_db(lambda conn: _revoke_account_sessions(conn, company_id, account_id), write=True)
 
 
+# ---------------------------------------------------------------------------
+# 원격 MCP 개인 토큰
+# ---------------------------------------------------------------------------
+
+MCP_TOKEN_PREFIX = "og_"
+MCP_TOKENS_PER_EMPLOYEE = 3
+MCP_TOKEN_LABEL_MAX = 40
+MCP_TOKEN_TOUCH_SECONDS = 60  # 마지막 사용 시각은 1분에 한 번만 갱신한다
+
+
+class TokenLimitReached(RuntimeError):
+    """The employee already has the maximum number of active MCP tokens."""
+
+
+def _mcp_token_public(row: dict) -> dict:
+    """토큰 목록용 공개 필드. 해시 전체·원문은 내보내지 않는다(식별용 짧은 id만)."""
+    return {
+        "token_id": row["token_hash"][:12],
+        "employee_id": row["employee_id"],
+        "label": row["label"],
+        "issued_at": row["issued_at"],
+        "last_used_at": row["last_used_at"],
+        "revoked_at": row["revoked_at"],
+        "active": row["revoked_at"] is None,
+    }
+
+
+def _active_owner_tokens(conn: Connection, company_id: str, employee_id: str) -> list[dict]:
+    return [
+        dict(r)
+        for r in conn.execute(
+            select(mcp_tokens).where(
+                and_(
+                    mcp_tokens.c.company_id == company_id,
+                    mcp_tokens.c.employee_id == employee_id,
+                    mcp_tokens.c.revoked_at.is_(None),
+                )
+            )
+        ).mappings()
+    ]
+
+
+def issue_mcp_token(
+    company_id: str, employee_id: str, label: str, *, actor: str | None = None
+) -> tuple[str, dict]:
+    """새 토큰을 만든다. (원문, 공개 정보)를 돌려준다. 원문은 호출한 쪽에 한 번만 보여 준다.
+
+    활성 토큰이 이미 MCP_TOKENS_PER_EMPLOYEE개면 TokenLimitReached.
+    """
+    label = " ".join(str(label or "").split())[:MCP_TOKEN_LABEL_MAX] or "이름 없음"
+    token = MCP_TOKEN_PREFIX + secrets.token_urlsafe(32)
+    now = _iso(_utc_now())
+
+    def operation(conn: Connection) -> dict:
+        if conn.dialect.name == "postgresql":
+            # 같은 사원의 동시 발급이 한도를 넘지 않도록 계정 행을 잠근다.
+            conn.execute(
+                select(accounts.c.account_id)
+                .where(_account_key(company_id, employee_id))
+                .with_for_update()
+            )
+        if len(_active_owner_tokens(conn, company_id, employee_id)) >= MCP_TOKENS_PER_EMPLOYEE:
+            raise TokenLimitReached()
+        row = {
+            "token_hash": _token_hash(token),
+            "company_id": company_id,
+            "employee_id": employee_id,
+            "label": label,
+            "issued_at": now,
+            "last_used_at": None,
+            "revoked_at": None,
+        }
+        conn.execute(insert(mcp_tokens).values(**row))
+        _audit(conn, company_id, actor or employee_id, "mcp_token_issue", employee_id,
+               {"token_id": row["token_hash"][:12], "label": label})
+        return _mcp_token_public(row)
+
+    return token, _run_db(operation, write=True, immediate=True)
+
+
+def list_mcp_tokens(
+    company_id: str, employee_id: str | None = None, *, include_revoked: bool = False
+) -> list[dict]:
+    """회사(또는 사원 한 명)의 토큰 공개 정보. 최신 발급순."""
+    def operation(conn: Connection) -> list[dict]:
+        cond = [mcp_tokens.c.company_id == company_id]
+        if employee_id is not None:
+            cond.append(mcp_tokens.c.employee_id == employee_id)
+        if not include_revoked:
+            cond.append(mcp_tokens.c.revoked_at.is_(None))
+        rows = conn.execute(
+            select(mcp_tokens).where(and_(*cond)).order_by(mcp_tokens.c.issued_at.desc())
+        ).mappings()
+        return [_mcp_token_public(dict(r)) for r in rows]
+
+    return _run_db(operation)
+
+
+def revoke_mcp_token(
+    company_id: str, token_id: str, *, employee_id: str | None = None, actor: str
+) -> bool:
+    """token_id(해시 앞 12자)로 토큰을 폐기한다. employee_id를 주면 그 사원 소유일 때만.
+
+    이미 폐기됐거나 없거나 다른 사원 소유면 False. 검증기는 요청마다 DB를 보므로 즉시 거부된다.
+    """
+    token_id = str(token_id or "")
+    if not re.fullmatch(r"[0-9a-f]{12}", token_id):
+        return False
+
+    def operation(conn: Connection) -> bool:
+        cond = [
+            mcp_tokens.c.company_id == company_id,
+            mcp_tokens.c.token_hash.startswith(token_id, autoescape=True),
+            mcp_tokens.c.revoked_at.is_(None),
+        ]
+        if employee_id is not None:
+            cond.append(mcp_tokens.c.employee_id == employee_id)
+        rows = conn.execute(select(mcp_tokens).where(and_(*cond))).mappings().all()
+        if len(rows) != 1:
+            return False
+        row = rows[0]
+        conn.execute(
+            update(mcp_tokens)
+            .where(mcp_tokens.c.token_hash == row["token_hash"])
+            .values(revoked_at=_iso(_utc_now()))
+        )
+        _audit(conn, company_id, actor, "mcp_token_revoke", row["employee_id"],
+               {"token_id": token_id, "label": row["label"]})
+        return True
+
+    return _run_db(operation, write=True)
+
+
+def revoke_mcp_token_by_value(token: str, *, actor: str = "operator") -> bool:
+    """운영자 CLI용: 원문 토큰으로 폐기."""
+    key = mcp_tokens.c.token_hash == _token_hash(token)
+
+    def operation(conn: Connection) -> bool:
+        row = conn.execute(select(mcp_tokens).where(key)).mappings().first()
+        if row is None or row["revoked_at"] is not None:
+            return False
+        conn.execute(update(mcp_tokens).where(key).values(revoked_at=_iso(_utc_now())))
+        _audit(conn, row["company_id"], actor, "mcp_token_revoke", row["employee_id"],
+               {"token_id": row["token_hash"][:12], "label": row["label"]})
+        return True
+
+    return _run_db(operation, write=True)
+
+
+def list_all_mcp_tokens(*, include_revoked: bool = False) -> list[dict]:
+    """운영자 CLI용: 전체 회사 토큰 공개 정보."""
+    def operation(conn: Connection) -> list[dict]:
+        query = select(mcp_tokens).order_by(mcp_tokens.c.issued_at.desc())
+        if not include_revoked:
+            query = query.where(mcp_tokens.c.revoked_at.is_(None))
+        return [
+            {**_mcp_token_public(dict(r)), "company_id": r["company_id"]}
+            for r in conn.execute(query).mappings()
+        ]
+
+    return _run_db(operation)
+
+
+def verify_mcp_token(token: str) -> dict | None:
+    """원격 MCP 요청마다 호출한다. 유효하면 {"company_id", "employee_id", "token_id"}.
+
+    폐기·모르는 토큰·비활성/잠금 계정·삭제된 사원은 None.
+    """
+    token = str(token or "")
+    if not token.startswith(MCP_TOKEN_PREFIX) or len(token) > 200:
+        return None
+    key = mcp_tokens.c.token_hash == _token_hash(token)
+    now = _utc_now()
+
+    def operation(conn: Connection) -> dict | None:
+        row = conn.execute(select(mcp_tokens).where(key)).mappings().first()
+        if row is None or row["revoked_at"] is not None:
+            return None
+        account = conn.execute(
+            select(accounts).where(_account_key(row["company_id"], row["employee_id"]))
+        ).mappings().first()
+        if (
+            account is None
+            or account["role"] != ROLE_EMPLOYEE
+            or _account_status(dict(account), now) in ("disabled", "locked")
+        ):
+            return None
+        last = _parse_iso(row["last_used_at"])
+        if last is None or (now - last).total_seconds() >= MCP_TOKEN_TOUCH_SECONDS:
+            conn.execute(update(mcp_tokens).where(key).values(last_used_at=_iso(now)))
+        return {
+            "company_id": row["company_id"],
+            "employee_id": row["employee_id"],
+            "token_id": row["token_hash"][:12],
+        }
+
+    return _run_db(operation, write=True)
+
+
 def company_overview(company_id: str) -> dict | None:
     """관리자 화면 상단: 회사 정보와 데이터 종류별 건수."""
 
@@ -3070,7 +3319,7 @@ def clear_tables_for_tests() -> None:
         raise RuntimeError("테스트 환경에서만 사용할 수 있습니다.")
 
     def operation(conn: Connection) -> None:
-        for table in (resources, login_sessions, audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
+        for table in (mcp_tokens, resources, login_sessions, audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
             conn.execute(delete(table))
 
     _run_db(operation, write=True)
@@ -3082,7 +3331,9 @@ def clear_tables_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 # 테스트가 흔히 바꾸는 표. 회사 정적 데이터(규정·사원 등)는 data_version으로 변경을 감지한다.
-_BASELINE_TABLES = (tickets, announcements, accounts, audit_log, login_sessions, resources)
+_BASELINE_TABLES = (
+    tickets, announcements, accounts, audit_log, login_sessions, resources, mcp_tokens,
+)
 
 
 def _require_testing() -> None:

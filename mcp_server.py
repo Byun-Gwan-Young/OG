@@ -1950,5 +1950,10 @@ if __name__ == "__main__":
         print(RESET_MOVED_MESSAGE, file=sys.stderr)
         raise SystemExit(2)
     configure_logging()
+    try:
+        storage.check_runtime_config()
+    except storage.ConfigurationError as exc:
+        log.critical("%s", exc)
+        raise SystemExit(2) from None
     prepare_database()
     mcp.run(show_banner=False)  # stdio

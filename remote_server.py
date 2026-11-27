@@ -10,8 +10,10 @@
     http://<주소>:8000/health  → 상태 확인
 
 실행:
-    python scripts/issue_token.py bridgesoft EMP001 --name "멘토 A"   # 토큰 발급
-    python remote_server.py                                           # 서버 시작
+    python remote_server.py                     # 서버 시작 (PORT 환경변수, 기본 8000)
+
+토큰은 사원이 웹 홈의 "AI 앱 연결" 카드에서 직접 발급한다(운영자 CLI: scripts/issue_token.py).
+토큰은 DB(mcp_tokens)에 해시로만 저장되고 요청마다 DB를 조회하므로 발급·폐기가 재시작 없이 반영된다.
 
 [stdio 버전과의 차이]
 - 툴 인자에 company_id / employee_id가 없다. 서버가 토큰을 보고 "누구인지" 정한다.
@@ -21,31 +23,45 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
+import logging
 import os
-from pathlib import Path
 from typing import Literal
 
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
 import mcp_server as core
 
-BASE_DIR = Path(__file__).resolve().parent
-TOKENS_FILE = Path(os.environ.get("OFFICEGENIE_TOKENS", BASE_DIR / "tokens.json"))
+log = logging.getLogger("officegenie.remote")
+
 HOST = os.environ.get("OFFICEGENIE_HOST", "0.0.0.0")
-PORT = int(os.environ.get("OFFICEGENIE_PORT", "8000"))
+# Render 등 호스팅은 PORT를 정해 준다. 로컬 실행·테스트는 OFFICEGENIE_PORT도 받는다.
+PORT = int(os.environ.get("PORT") or os.environ.get("OFFICEGENIE_PORT") or "8000")
 
 
-def load_tokens() -> dict:
-    if not TOKENS_FILE.is_file():
-        return {}
-    with TOKENS_FILE.open(encoding="utf-8") as f:
-        return json.load(f)
+class DbTokenVerifier(TokenVerifier):
+    """요청마다 DB(mcp_tokens)를 조회해 토큰을 검증한다. 메모리에 토큰 목록을 두지 않는다."""
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        try:
+            owner = await asyncio.to_thread(core.storage.verify_mcp_token, token)
+        except core.storage.StorageUnavailable:
+            log.warning("token check failed: DB unavailable")
+            return None
+        if owner is None:
+            return None
+        return AccessToken(
+            token=token,
+            client_id=f"{owner['company_id']}:{owner['employee_id']}",
+            scopes=[],
+            claims={**owner},
+        )
 
 
 mcp = FastMCP(
@@ -57,7 +73,7 @@ mcp = FastMCP(
         "규정 답변은 핵심 요약 / 상세 기준 / 근거 조항(citation) 순서로 쓴다."
     ),
     website_url="https://github.com/",  # 저장소 주소로 바꾸세요
-    auth=StaticTokenVerifier(tokens=load_tokens()),
+    auth=DbTokenVerifier(),
 )
 
 
@@ -251,9 +267,24 @@ document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on',p.id===b.
 </script></body></html>"""
 
 
+def _first_header(request: Request, name: str) -> str:
+    # 프록시를 여러 번 거치면 "https, http"처럼 쉼표로 이어진다. 맨 앞이 사용자 쪽 값이다.
+    return request.headers.get(name, "").split(",")[0].strip()
+
+
 def _base_url(request: Request) -> str:
-    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
-    host = request.headers.get("x-forwarded-host", request.headers.get("host", f"localhost:{PORT}"))
+    """안내 홈페이지에 보여 줄 공개 주소. Render 프록시 뒤에서는 x-forwarded-*를 따른다.
+
+    OFFICEGENIE_MCP_PUBLIC_URL이 있으면 그 값을 우선한다(끝의 /mcp는 떼고 쓴다).
+    """
+    public = os.environ.get("OFFICEGENIE_MCP_PUBLIC_URL", "").strip().rstrip("/")
+    if public.startswith(("https://", "http://")):
+        return public.removesuffix("/mcp")
+    proto = _first_header(request, "x-forwarded-proto").lower()
+    if proto not in ("http", "https"):
+        proto = request.url.scheme
+    host = (_first_header(request, "x-forwarded-host")
+            or request.headers.get("host") or f"localhost:{PORT}")
     return f"{proto}://{host}"
 
 
@@ -270,15 +301,17 @@ async def health(request: Request) -> JSONResponse:
     except core.storage.StorageUnavailable:
         company_count, status = 0, "db_unavailable"
     # 회사 ID 목록은 공개하지 않는다(멀티테넌트). 개수만 알린다.
-    return JSONResponse({"status": status, "company_count": company_count,
-                         "tokens_loaded": len(load_tokens())})
+    # DB가 잠시 느려도 헬스 체크 실패로 재시작 반복이 생기지 않도록 상태는 본문으로만 알린다.
+    return JSONResponse({"status": status, "company_count": company_count})
 
 
 if __name__ == "__main__":
-    if not load_tokens():
-        print("[경고] tokens.json이 없습니다. 먼저 토큰을 발급하세요:\n"
-              "  python scripts/issue_token.py bridgesoft EMP001 --name \"테스터\"")
     core.configure_logging()
+    try:
+        core.storage.check_runtime_config()
+    except core.storage.ConfigurationError as exc:
+        log.critical("%s", exc)
+        raise SystemExit(2) from None
     core.prepare_database()
     print(f"홈페이지: http://localhost:{PORT}/   MCP: http://localhost:{PORT}/mcp")
     mcp.run(transport="http", host=HOST, port=PORT, show_banner=False)

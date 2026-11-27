@@ -37,18 +37,29 @@ def remote_db(tmp_path_factory):
     return tmp, env
 
 
+def _issue(db_env, company_id, employee_id, name="test"):
+    """운영자 CLI로 DB에 토큰을 발급하고 원문을 돌려준다(tokens.json 없음)."""
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "issue_token.py"), company_id, employee_id, "--name", name],
+        env=db_env, capture_output=True, text=True, timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    return next(line.split(": ", 1)[1] for line in done.stdout.splitlines() if line.startswith("토큰: "))
+
+
 @pytest.fixture(scope="module")
-def server(remote_db):
+def tokens(remote_db):
+    _, db_env = remote_db
+    return {"A": _issue(db_env, "bridgesoft", "EMP001"), "B": _issue(db_env, "nextwave", "EMP001")}
+
+
+@pytest.fixture(scope="module")
+def server(remote_db, tokens):
     tmp, db_env = remote_db
-    tokens = {
-        "tokA": {"client_id": "a", "scopes": [], "company_id": "bridgesoft", "employee_id": "EMP001"},
-        "tokB": {"client_id": "b", "scopes": [], "company_id": "nextwave", "employee_id": "EMP001"},
-    }
-    (tmp / "tokens.json").write_text(json.dumps(tokens), encoding="utf-8")
     port = _free_port()
-    env = {**db_env,
-           "OFFICEGENIE_TOKENS": str(tmp / "tokens.json"),
-           "OFFICEGENIE_HOST": "127.0.0.1", "OFFICEGENIE_PORT": str(port)}
+    env = {**db_env, "OFFICEGENIE_HOST": "127.0.0.1", "PORT": str(port)}
+    env.pop("OFFICEGENIE_PORT", None)
+    env.pop("OFFICEGENIE_MCP_PUBLIC_URL", None)
     proc = subprocess.Popen([sys.executable, str(ROOT / "remote_server.py")], env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     base = f"http://127.0.0.1:{port}"
@@ -79,8 +90,8 @@ async def test_wrong_token_rejected(server):
             await c.list_tools()
 
 
-async def test_identity_comes_from_token(server):
-    async with Client(server + "/mcp", auth=BearerAuth("tokA")) as c:
+async def test_identity_comes_from_token(server, tokens):
+    async with Client(server + "/mcp", auth=BearerAuth(tokens["A"])) as c:
         tools = await c.list_tools()
         for t in tools:
             schema = getattr(t, "input_schema", None) or t.inputSchema
@@ -89,12 +100,12 @@ async def test_identity_comes_from_token(server):
         assert call(await c.call_tool("get_employee_info", {"target": "EMP002"}))["code"] == "PERMISSION_DENIED"
         r = call(await c.call_tool("search_policy", {"query": "점심 식대 한도"}))
         assert "12,000원" in r["data"]["results"][0]["content"]
-    async with Client(server + "/mcp", auth=BearerAuth("tokB")) as c:
+    async with Client(server + "/mcp", auth=BearerAuth(tokens["B"])) as c:
         assert call(await c.call_tool("get_employee_info", {}))["data"]["name"] == D.employee("nextwave", "EMP001")["name"]
 
 
-async def test_two_step_ticket(server):
-    async with Client(server + "/mcp", auth=BearerAuth("tokA")) as c:
+async def test_two_step_ticket(server, tokens):
+    async with Client(server + "/mcp", auth=BearerAuth(tokens["A"])) as c:
         assert call(await c.call_tool("create_support_ticket", {"item": "노트북 거치대"}))["code"] == "NEEDS_CONFIRMATION"
         r = call(await c.call_tool("confirm_support_ticket", {"item": "노트북 거치대"}))
         assert r["code"] == "CREATED" and r["data"]["ticket"]["ticket_id"] == "REQ-004"
@@ -102,7 +113,7 @@ async def test_two_step_ticket(server):
         assert mine[0]["ticket_id"] == "REQ-004"
 
 
-async def test_web_and_remote_processes_issue_unique_ticket_numbers(server, remote_db):
+async def test_web_and_remote_processes_issue_unique_ticket_numbers(server, remote_db, tokens):
     """웹용 stdio MCP 프로세스와 원격 서버 프로세스가 같은 DB에 동시에 티켓을 만들어도 번호가 겹치지 않는다."""
     import asyncio
 
@@ -110,7 +121,7 @@ async def test_web_and_remote_processes_issue_unique_ticket_numbers(server, remo
 
     _, db_env = remote_db
     stdio = Client(PythonStdioTransport(script_path=str(ROOT / "mcp_server.py"), env=db_env), timeout=60)
-    remote = Client(server + "/mcp", auth=BearerAuth("tokA"))
+    remote = Client(server + "/mcp", auth=BearerAuth(tokens["A"]))
     n = 8
     async with stdio, remote:
         jobs = [
@@ -131,3 +142,32 @@ async def test_web_and_remote_processes_issue_unique_ticket_numbers(server, remo
         side = call(await stdio.call_tool("ui_get_sidebar", {"company_id": "bridgesoft", "employee_id": "EMP002"}))
         stored = {t["ticket_id"] for t in side["data"]["tickets"]}
         assert {i for i, r in zip(ids, results) if "웹계정" in r["data"]["ticket"]["item"]} <= stored
+
+
+def test_tokens_file_not_used(server, remote_db):
+    tmp, _ = remote_db
+    assert not (tmp / "tokens.json").exists() and not (ROOT / "tokens.json").exists()
+
+
+async def test_issue_and_revoke_apply_without_restart(server, remote_db):
+    """서버가 떠 있는 동안 새로 발급한 토큰은 바로 통과하고, 폐기하면 바로 거부된다."""
+    _, db_env = remote_db
+    fresh = _issue(db_env, "bridgesoft", "EMP002", "재시작 없음")
+    async with Client(server + "/mcp", auth=BearerAuth(fresh)) as c:
+        assert call(await c.call_tool("get_employee_info", {}))["ok"]
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "issue_token.py"), "--revoke", fresh],
+        env=db_env, capture_output=True, text=True, timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    with pytest.raises(Exception):
+        async with Client(server + "/mcp", auth=BearerAuth(fresh)) as c:
+            await c.list_tools()
+
+
+def test_homepage_uses_forwarded_https_host(server):
+    req = urllib.request.Request(server + "/", headers={
+        "X-Forwarded-Proto": "https", "X-Forwarded-Host": "officegenie-mcp.onrender.com"})
+    html = urllib.request.urlopen(req).read().decode()
+    assert "https://officegenie-mcp.onrender.com/mcp" in html
+    assert "http://officegenie-mcp.onrender.com" not in html
