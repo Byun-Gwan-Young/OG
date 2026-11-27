@@ -70,6 +70,7 @@ def test_render_blueprint_matches_deploy_contract():
     version = (ROOT / ".python-version").read_text().strip()
     for svc in services.values():
         assert svc["plan"] == "free" and svc["runtime"] == "python"
+        assert svc["region"] == "singapore"
         env = {e["key"]: e for e in svc["envVars"]}
         assert env["OFFICEGENIE_ENV"]["value"] == "production"
         assert env["PYTHON_VERSION"]["value"] == version
