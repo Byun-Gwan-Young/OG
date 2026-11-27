@@ -167,7 +167,7 @@ async def test_issue_and_revoke_apply_without_restart(server, remote_db):
 
 def test_homepage_uses_forwarded_https_host(server):
     req = urllib.request.Request(server + "/", headers={
-        "X-Forwarded-Proto": "https", "X-Forwarded-Host": "officegenie-mcp.onrender.com"})
+        "X-Forwarded-Proto": "https", "X-Forwarded-Host": "mcp.officegenie.example.com"})
     html = urllib.request.urlopen(req).read().decode()
-    assert "https://officegenie-mcp.onrender.com/mcp" in html
-    assert "http://officegenie-mcp.onrender.com" not in html
+    assert "https://mcp.officegenie.example.com/mcp" in html
+    assert "http://mcp.officegenie.example.com" not in html

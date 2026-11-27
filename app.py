@@ -851,7 +851,6 @@ def _render_styles() -> None:
             border-radius: 16px;
             box-shadow: 0 8px 24px rgba(32, 45, 64, 0.04);
         }
-        .login-wake-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; text-align: center; }
         .login-title {
             padding: 0 !important;
             margin: 0 !important;
@@ -2404,7 +2403,7 @@ def _session_still_valid(agent: OfficeGenieAgent) -> bool:
 
 
 def _request_is_https() -> bool:
-    """사용자 브라우저와 맺은 연결이 HTTPS인지. Render 같은 프록시 뒤에서는 앱까지는 HTTP로
+    """사용자 브라우저와 맺은 연결이 HTTPS인지. Caddy 같은 리버스 프록시 뒤에서는 앱까지는 HTTP로
     들어오므로 프록시가 붙이는 X-Forwarded-Proto(쉼표로 이어지면 맨 앞)를 본다."""
     try:
         proto = (st.context.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
@@ -2826,10 +2825,6 @@ def _submit_login() -> None:
         state.login_password = ""
 
 
-# 무료 호스팅은 한동안 요청이 없으면 서버가 잠들고, 깨는 데 최대 1분쯤 걸린다.
-WAKE_NOTE = "한동안 접속이 없었다면 서버가 깨어나느라 처음 로딩에 최대 1분 정도 걸릴 수 있어요."
-
-
 def _render_login() -> None:
     state = st.session_state
     if "login_prefill_code" in st.session_state:
@@ -2878,9 +2873,6 @@ def _render_login() -> None:
                     label, key="login_submit",
                     type="primary", width="stretch", disabled=busy, on_click=_submit_login,
                 )
-            st.markdown(
-                f"<p class='login-wake-note'>{_escape(WAKE_NOTE)}</p>", unsafe_allow_html=True
-            )
     if future is not None:
         try:
             result = future.result()

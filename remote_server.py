@@ -41,7 +41,7 @@ import mcp_server as core
 log = logging.getLogger("officegenie.remote")
 
 HOST = os.environ.get("OFFICEGENIE_HOST", "0.0.0.0")
-# Render 등 호스팅은 PORT를 정해 준다. 로컬 실행·테스트는 OFFICEGENIE_PORT도 받는다.
+# PORT가 있으면 우선한다(컨테이너는 8000). 로컬 실행·테스트는 OFFICEGENIE_PORT도 받는다.
 PORT = int(os.environ.get("PORT") or os.environ.get("OFFICEGENIE_PORT") or "8000")
 
 
@@ -273,7 +273,7 @@ def _first_header(request: Request, name: str) -> str:
 
 
 def _base_url(request: Request) -> str:
-    """안내 홈페이지에 보여 줄 공개 주소. Render 프록시 뒤에서는 x-forwarded-*를 따른다.
+    """안내 홈페이지에 보여 줄 공개 주소. Caddy 같은 리버스 프록시 뒤에서는 x-forwarded-*를 따른다.
 
     OFFICEGENIE_MCP_PUBLIC_URL이 있으면 그 값을 우선한다(끝의 /mcp는 떼고 쓴다).
     """

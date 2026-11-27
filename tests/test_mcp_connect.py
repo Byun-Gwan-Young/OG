@@ -102,8 +102,8 @@ def test_admin_list_and_force_revoke_are_admin_only_and_audited():
 def test_mcp_url_empty_when_not_configured(monkeypatch):
     monkeypatch.delenv("OFFICEGENIE_MCP_PUBLIC_URL")
     assert s.ui_list_my_mcp_tokens(A, "EMP001")["data"]["mcp_url"] == ""
-    monkeypatch.setenv("OFFICEGENIE_MCP_PUBLIC_URL", "https://x.onrender.com/")
-    assert s.mcp_public_url() == "https://x.onrender.com/mcp"
+    monkeypatch.setenv("OFFICEGENIE_MCP_PUBLIC_URL", "https://mcp.example.com/")
+    assert s.mcp_public_url() == "https://mcp.example.com/mcp"
 
 
 def test_employee_home_card_issues_shows_once_and_revokes():

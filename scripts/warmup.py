@@ -1,8 +1,8 @@
-"""잠든 Render 무료 서비스를 깨우고 응답 시간·상태를 표로 출력한다.
+"""배포한 웹·MCP 서비스가 응답하는지 확인하고 응답 시간·상태를 표로 출력한다.
 
-    python scripts/warmup.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
+    python scripts/warmup.py https://officegenie.example.com https://mcp.officegenie.example.com
 
-- 무료 플랜은 15분 동안 요청이 없으면 잠들고, 깨는 데 최대 1분쯤 걸린다.
+- 배포·재시작 직후에는 컨테이너가 준비될 때까지 잠시 걸릴 수 있다.
 - 두 서비스에 동시에 요청을 보내고, 응답이 올 때까지(기본 최대 120초) 다시 시도한다.
 - MCP 주소는 끝에 /mcp가 있어도 된다. 표준 라이브러리만 쓴다.
 - 모두 정상이면 종료 코드 0, 하나라도 실패하면 1.
@@ -114,9 +114,9 @@ def print_table(rows: list[list[str]], headers: list[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Render 서비스 깨우기")
-    p.add_argument("web_url", help="웹 주소 (예: https://officegenie.onrender.com)")
-    p.add_argument("mcp_url", help="MCP 주소 (예: https://officegenie-mcp.onrender.com 또는 …/mcp)")
+    p = argparse.ArgumentParser(description="배포 서비스 응답 확인")
+    p.add_argument("web_url", help="웹 주소 (예: https://officegenie.example.com)")
+    p.add_argument("mcp_url", help="MCP 주소 (예: https://mcp.officegenie.example.com 또는 …/mcp)")
     p.add_argument("--timeout", type=float, default=120, help="서비스별 최대 대기 시간(초)")
     a = p.parse_args(argv)
 
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         ("웹 첫 화면", web_base(a.web_url) + "/", _health_ok),
         ("MCP", mcp_base(a.mcp_url) + "/health", _mcp_health_ok),
     ]
-    print(f"서비스를 깨우는 중입니다. 잠들어 있었다면 최대 1분쯤 걸립니다 (최대 {a.timeout:.0f}초 대기).")
+    print(f"서비스 응답을 확인하는 중입니다. 재시작 직후라면 조금 걸릴 수 있습니다 (최대 {a.timeout:.0f}초 대기).")
     with ThreadPoolExecutor(max_workers=len(targets)) as pool:
         results = list(pool.map(lambda t: wake(t[0], t[1], t[2], a.timeout), targets))
     print_table(
@@ -134,9 +134,9 @@ def main(argv: list[str] | None = None) -> int:
         ["서비스", "주소", "결과", "HTTP", "첫 응답", "정상까지", "시도"],
     )
     if all(r.ok for r in results):
-        print("모두 깨어 있습니다.")
+        print("모두 정상 응답합니다.")
         return 0
-    print("응답하지 않는 서비스가 있습니다. Render 대시보드의 Logs를 확인하세요.")
+    print("응답하지 않는 서비스가 있습니다. 서버에서 deploy/logs.sh 로 로그를 확인하세요.")
     return 1
 
 

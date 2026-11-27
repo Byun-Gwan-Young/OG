@@ -350,7 +350,7 @@ def is_production() -> bool:
 def check_runtime_config() -> None:
     """운영(OFFICEGENIE_ENV=production)에서는 DATABASE_URL이 반드시 있어야 한다.
 
-    Render 무료 서비스는 재시작·잠들 때 서버 안 파일이 사라지므로 로컬 SQLite로 넘어가면
+    컨테이너는 다시 만들거나 업데이트할 때 안의 파일이 사라지므로 로컬 SQLite로 넘어가면
     데이터가 조용히 사라진다. 그래서 시작 단계에서 멈춘다. 테스트 실행은 검사하지 않는다.
     """
     if os.environ.get("OFFICEGENIE_TESTING") == "1" or not is_production():

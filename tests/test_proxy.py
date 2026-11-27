@@ -1,4 +1,4 @@
-"""Render 같은 HTTPS 프록시 뒤에서 동작: 로그인 쿠키 Secure, 공개 주소."""
+"""Caddy 같은 HTTPS 리버스 프록시 뒤에서 동작: 로그인 쿠키 Secure, 공개 주소."""
 from __future__ import annotations
 
 import json
@@ -37,7 +37,7 @@ def _cookie_scripts(headers: dict, monkeypatch) -> list[str]:
 
 
 def test_login_cookie_secure_behind_https_proxy(monkeypatch):
-    scripts = _cookie_scripts({"X-Forwarded-Proto": "https", "Host": "officegenie.onrender.com"}, monkeypatch)
+    scripts = _cookie_scripts({"X-Forwarded-Proto": "https", "Host": "officegenie.example.com"}, monkeypatch)
     assert scripts and all("SameSite=Strict; Secure" in s for s in scripts)
 
 
@@ -52,31 +52,8 @@ def test_login_cookie_plain_http_keeps_js_fallback(monkeypatch):
     assert "location.protocol === 'https:'" in scripts[0]
 
 
-def test_render_blueprint_matches_deploy_contract():
-    yaml = pytest.importorskip("yaml")
+def test_streamlit_config_for_deploy():
     tomllib = pytest.importorskip("tomllib")
-    blueprint = yaml.safe_load((ROOT / "render.yaml").read_text("utf-8"))
-    services = {svc["name"]: svc for svc in blueprint["services"]}
-    assert set(services) == {"officegenie", "officegenie-mcp"}
-    web, mcp = services["officegenie"], services["officegenie-mcp"]
-    assert web["buildCommand"] == "pip install -r requirements.txt && python scripts/pwa_setup.py"
-    assert web["startCommand"].endswith(
-        "streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true")
-    assert web["startCommand"].startswith("python scripts/preflight.py && ")
-    assert web["healthCheckPath"] == "/_stcore/health"
-    assert mcp["buildCommand"] == "pip install -r requirements.txt"
-    assert mcp["startCommand"] == "python remote_server.py"
-    assert mcp["healthCheckPath"] == "/health"
-    version = (ROOT / ".python-version").read_text().strip()
-    for svc in services.values():
-        assert svc["plan"] == "free" and svc["runtime"] == "python"
-        assert svc["region"] == "singapore"
-        env = {e["key"]: e for e in svc["envVars"]}
-        assert env["OFFICEGENIE_ENV"]["value"] == "production"
-        assert env["PYTHON_VERSION"]["value"] == version
-        for secret in ("DATABASE_URL", "LLM_API_KEY", "LLM_BASE_URL",
-                       "OFFICEGENIE_SIGNUP_CODE", "OFFICEGENIE_MCP_PUBLIC_URL"):
-            assert env[secret] == {"key": secret, "sync": False}
     config = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text("utf-8"))
     assert config["server"]["headless"] is True
     assert config["server"]["enableXsrfProtection"] is True

@@ -1,6 +1,6 @@
 """배포 후 점검을 자동으로 한다. 실제 로그인·토큰 발급이 필요한 항목은 수동 확인 목록으로 안내한다.
 
-    python scripts/deploy_check.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
+    python scripts/deploy_check.py https://officegenie.example.com https://mcp.officegenie.example.com
 
 자동 점검
 - 웹: 첫 화면 응답, Streamlit 헬스 경로, PWA 태그(manifest 링크·서비스 워커 등록)
@@ -9,7 +9,7 @@
 - MCP: /health 상태, 안내 홈페이지에 https MCP 주소 표시, 잘못된 토큰·토큰 없음 거부(401)
 
 --allow-http: 로컬 점검용. HTTPS 항목을 실패 대신 경고로 표시한다.
-먼저 scripts/warmup.py로 서비스를 깨워 두면 빠르다. 종료 코드: 실패 0개면 0, 아니면 1.
+먼저 scripts/warmup.py로 두 서비스가 응답하는지 확인하면 빠르다. 종료 코드: 실패 0개면 0, 아니면 1.
 """
 from __future__ import annotations
 
