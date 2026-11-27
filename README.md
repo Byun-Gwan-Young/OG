@@ -13,7 +13,7 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?logo=streamlit&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-131%20passed-2EA043)
 
-<img src="docs/images/ui-review/after-pc-home.png" alt="오피스지니 사원 홈(사원증)" width="860">
+<img src="docs/images/ui-review/after/pc-home.png" alt="오피스지니 사원 홈(사원증)" width="860">
 
 </div>
 
@@ -83,11 +83,12 @@ streamlit run app.py                                 # 회사 코드 + EMP001 + 
 
 | 문서 | 내용 |
 |---|---|
-| [직원 가이드](docs/guide-employee.md) | 화면으로 보는 사용법: 질문하기, 비품 신청, 권한 안내 |
+| [직원 가이드](docs/guide-employee.md) | 화면으로 보는 사용법: 질문하기, 비품 신청, 권한 안내, 앱 설치 방법 |
 | [AI 앱 연결 가이드](docs/guide-mcp.md) | Claude Code · Cursor · VS Code에 MCP 서버 연결 |
 | [관리자 가이드](docs/guide-admin.md) | 설치, 실행, 토큰 관리, 운영, 문제 해결, 설정 값 |
 | [구조와 보안](docs/architecture.md) | 아키텍처, MCP 툴, 보안 설계, 다른 회사 적용, 테스트 |
 | [UI 연동 규격](docs/ui_contract.md) | `app.py` ↔ `agent.py` 함수와 반환 형식 (개발자용) |
+| [화면 점검 기록](docs/ui-review.md) | 아이콘 깨짐 원인, 화면별 문제와 수정, 수정 전·후 스크린샷 |
 
 ## 🗺 로드맵
 

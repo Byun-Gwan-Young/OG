@@ -1,0 +1,138 @@
+{
+  "pc-landing": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-login": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-login-error": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-register": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-home": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-home-ai-connect": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-notices": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-library": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-equipment": {
+    "fontReady": false,
+    "problems": []
+  },
+  "pc-chat": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-admin-home": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-admin-notices": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-admin-library": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-admin-equipment": {
+    "fontReady": false,
+    "problems": []
+  },
+  "pc-admin-employees": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-admin-data": {
+    "fontReady": true,
+    "problems": []
+  },
+  "pc-admin-preview": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-landing": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-login": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-login-error": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-register": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-home": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-home-ai-connect": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-notices": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-library": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-equipment": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-chat": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-admin-home": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-admin-notices": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-admin-library": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-admin-equipment": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-admin-employees": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-admin-data": {
+    "fontReady": true,
+    "problems": []
+  },
+  "mobile-admin-preview": {
+    "fontReady": true,
+    "problems": []
+  }
+}

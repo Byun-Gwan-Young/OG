@@ -34,10 +34,12 @@
     업로드 데이터는 항상 로그인한 관리자의 회사로만 반영한다.
 11. 부서 전용 자료는 서버에서 부서를 확인한다(목록과 내려받기 모두). 화면에서 숨기는 것에 의존하지 않는다.
 12. 서비스 워커는 `/_stcore/`와 API 응답(페이지 응답 포함)을 저장하지 않는다. 미리 저장하는 것은 아이콘과 offline.html뿐이다.
+    캐시 이름에는 빌드 버전을 넣는다(pwa_setup.py가 채움). 앱 설치 안내는 최상위 문서의 `pwa/install.js`에서 한다.
 13. streamlit 버전을 바꾸면 `python scripts/pwa_setup.py`를 다시 실행하고 PWA 동작(manifest 응답, 서비스 워커 등록, 오프라인 화면)을 확인한다.
 14. 실행 중 로컬 파일에 데이터를 쓰지 않는다. 모든 상태는 DB에 저장한다. MCP 토큰은 해시만 저장한다.
     `OFFICEGENIE_ENV=production`에서는 `DATABASE_URL`이 필수다(SQLite로 넘어가지 않는다).
 15. 운영 비밀값은 서버의 .env.production에만 둔다. 웹·MCP 포트는 Caddy 뒤에만 둔다.
+    Caddy의 HTTP/3는 끈다(보안 그룹이 UDP 443을 열지 않으므로, 켜면 아이콘 폰트 요청이 실패해 아이콘 이름 글자가 보인다).
     (`.env.production`은 .gitignore·.dockerignore에 둔다. docker-compose.yml의 web·mcp에는 `ports`를 두지 않는다.)
 
 ## 확인 기준 (PRD)

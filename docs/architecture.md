@@ -126,12 +126,15 @@ Streamlit은 앱 코드에서 `<head>`를 바꿀 수 없어서, 설치된 stream
 | 파일 | 위치(서빙 경로) | 역할 |
 |---|---|---|
 | `pwa/manifest.webmanifest` | `/pwa/manifest.webmanifest` | 이름·시작 주소(`/?source=pwa`)·standalone·디자인 토큰 색·바로가기(공지사항·비품 신청·자료실) |
-| `pwa/sw.js` | `/sw.js`(범위 `/`) | 서비스 워커 |
+| `pwa/sw.js` | `/sw.js`(범위 `/`) | 서비스 워커. 복사할 때 캐시 이름에 빌드 버전(PWA 파일 + streamlit 버전 해시)을 넣음 |
+| `pwa/install.js` | `/pwa/install.js` | 앱 설치 안내: `beforeinstallprompt`를 잡아 "앱 설치" 버튼, iPhone Safari는 "공유 → 홈 화면에 추가" 안내(닫으면 기억), 사원 홈 카드(`#og-install`) 연결, 아이콘 글꼴을 못 받으면 이름 글자 감춤 |
 | `pwa/offline.html` | `/pwa/offline.html` | 연결이 끊겼을 때 보여 줄 화면(외부 리소스 없음) |
 | `pwa/icon-*.png`, `apple-touch-icon.png` | `/pwa/…` | 192·512·maskable 512·180 아이콘(`make_pwa_icons.py`) |
 
-- `scripts/pwa_setup.py`가 위 파일을 복사하고 `index.html` `<head>`에 manifest 링크, `theme-color`, `apple-mobile-web-app-*`, `apple-touch-icon`, 서비스 워커 등록 코드를 표시 주석 사이에 넣고 `viewport-fit=cover`(아이폰 안전 영역)를 더합니다. 멱등이며 `--check`, `--undo`(원본 그대로 복원)를 지원합니다. 링크에는 파일 해시(`?v=`)를 붙여 Streamlit의 긴 캐시를 피하고, 서비스 워커는 `updateViaCache: "none"`으로 등록합니다.
-- **서비스 워커는 아이콘과 offline.html만 미리 저장**합니다. 페이지 이동은 네트워크 우선이고 실패하면 offline.html을 보여 줍니다. 페이지 응답, `/_stcore/`(웹소켓·상태 확인·업로드), 그 밖의 응답은 가로채거나 저장하지 않습니다(개인정보·실시간 연결).
+- `scripts/pwa_setup.py`가 위 파일을 복사하고 `index.html` `<head>`에 manifest 링크, `theme-color`, `apple-mobile-web-app-*`, `apple-touch-icon`, 서비스 워커 등록 코드, `install.js`, 아이콘 글꼴(Material Symbols) `preload`를 표시 주석 사이에 넣고 `viewport-fit=cover`(아이폰 안전 영역)를 더합니다. 멱등이며 `--check`, `--undo`(원본 그대로 복원)를 지원합니다. 링크에는 파일 해시(`?v=`)를 붙여 Streamlit의 긴 캐시를 피하고, 서비스 워커는 `updateViaCache: "none"`으로 등록합니다.
+- 설치 안내는 Streamlit 화면이 아니라 최상위 문서(`index.html`)에서 처리합니다. 화면 코드가 iframe 안에서 돌면 설치 이벤트를 받을 수 없기 때문입니다. 로그인·회사 등록 입력 화면에서는 버튼·안내를 띄우지 않고, 앱으로 실행 중(`display-mode: standalone`)이거나 설치가 끝나면(`appinstalled`) 숨깁니다.
+- **서비스 워커는 아이콘과 offline.html만 미리 저장**합니다. 새 빌드가 배포되면 캐시 이름이 바뀌고 activate에서 옛 `officegenie-*` 캐시를 지웁니다. HTML·JS·CSS·폰트는 가로채지 않아 항상 네트워크(브라우저 기본 캐시)로 받습니다. 페이지 이동은 네트워크 우선이고 실패하면 offline.html을 보여 줍니다. 페이지 응답, `/_stcore/`(웹소켓·상태 확인·업로드), 그 밖의 응답은 가로채거나 저장하지 않습니다(개인정보·실시간 연결).
+- **아이콘 깨짐 방지**: 앱 CSS가 `[data-testid="stIconMaterial"]`에 Material 글꼴을 `!important`로 고정하고 폭을 1글자로 묶습니다. Caddy는 HTTP/3를 끄고 `Alt-Svc: clear`를 보냅니다(보안 그룹이 UDP 443을 막아 HTTP/3 광고 시 글꼴 요청이 실패했음).
 - 서비스 워커와 설치는 **HTTPS 또는 localhost에서만** 동작합니다. 등록 코드는 `window.isSecureContext`일 때만 실행됩니다.
 - `app.py`는 시작할 때 한 번 적용 여부를 확인해 미적용이면 서버 로그에 "python scripts/pwa_setup.py 실행 필요"를 남깁니다(화면 오류는 아님).
 - streamlit 버전은 `requirements.txt`에 고정(`==`)합니다. 버전을 바꾸면 static 폴더가 새로 깔리므로 `pwa_setup.py`를 다시 실행하고 `tests/test_browser_mobile.py`로 manifest·서비스 워커·오프라인 화면을 확인합니다.
@@ -270,7 +273,8 @@ python -m pytest -q --pg-all                         # PostgreSQL에서도 전�
 | `test_mcp_connect.py` | 9 | AI 앱 연결 카드: 발급 원문 한 번만·폐기, 안내 명령에 공개 MCP 주소, 관리자 현황·강제 폐기(같은 회사만), 미리보기에서 발급·폐기 불가, LLM 툴 아님 |
 | `test_proxy.py` | 5 | 프록시 헤더(X-Forwarded-Proto)가 https면 로그인 쿠키 Secure, config.toml 배포 설정, PORT 환경변수 |
 | `test_deploy_tools.py` | 4 | 로컬 웹·MCP 서버에 warmup.py·deploy_check.py 실행(PWA 파일, /health, 잘못된 토큰 401, http 경고·실패) |
-| `test_deploy_config.py` | 16 | EC2 구성: Render 설정 파일·주소 흔적 없음, compose에서 web·mcp 포트 미공개·헬스체크·재시작·로그 제한·인증서 볼륨, Dockerfile(pwa_setup·비 root·버전), Caddyfile, .env.production 제외, deploy 스크립트(가짜 docker로 deploy.sh 성공·실패 시 로그 50줄·필수 값 누락, 비밀 값 미출력) |
+| `test_browser_install.py` | 8 | 설치 버튼(설치 창·appinstalled·standalone 숨김), iPhone 안내(1회·기억·저장소 차단·챗봇/탭바 안 가림), 홈 카드, 아이콘 이름 글자 없음, 글꼴 실패 시 감춤, 미리보기에 카드 없음 |
+| `test_deploy_config.py` | 17 | EC2 구성: Render 설정 파일·주소 흔적 없음, compose에서 web·mcp 포트 미공개·헬스체크·재시작·로그 제한·인증서 볼륨, Dockerfile(pwa_setup·비 root·버전), Caddyfile, .env.production 제외, deploy 스크립트(가짜 docker로 deploy.sh 성공·실패 시 로그 50줄·필수 값 누락, 비밀 값 미출력) |
 | `test_storage.py` | 24 | DB 가져오기 · 재가져오기 티켓 유지 · 롤백 · 캐시 · 동시 발급 · 로그에 주소 미노출 |
 | `test_accounts.py` | 22 | 회사 코드, 로그인 동일 문구·5회 잠금, 해시 저장, 초기 비밀번호, 응답에 비밀번호 없음, LLM 툴 목록 |
 | `test_register.py` | 7 | 회사 등록·가입 코드·ADMIN 로그인, 빈 회사 처리, 관리자 권한 |
@@ -280,7 +284,7 @@ python -m pytest -q --pg-all                         # PostgreSQL에서도 전�
 | `test_notices.py` | 5 | 공개 공지만, NEW 배지·검색·펼치기, 관리자 목록에서 바로 수정·공개 전환 |
 | `test_resources.py` | 30 | 부서 전용 자료 목록·다운로드 거부, 비공개, 형식·내용 불일치·5MB, 파일명 정리, 링크 검증, 관리자만 변경, 회사 간 격리, 감사 로그, init_db 테이블 추가 |
 | `test_equipment.py` | 10 | get_my_tickets 본인 것만·관리자 변경 반영·예정일 미기재, LLM 사번 위조 무시, 남은 수량, 신청 폼→확인→확정→내역 |
-| `test_pwa.py` | 14 | pwa_setup.py 멱등·--check·--undo 원본 복원, manifest·디자인 토큰 색, 아이콘 크기, 서비스 워커가 저장하지 않는 것, streamlit 버전 고정 |
+| `test_pwa.py` | 18 | pwa_setup.py 멱등·--check·--undo 원본 복원, 서비스 워커 빌드 버전·설치 스크립트·아이콘 글꼴 preload, manifest·디자인 토큰 색, 아이콘 크기, 서비스 워커가 저장하지 않는 것, streamlit 버전 고정 |
 | `test_app_login.py` | 17 | Streamlit AppTest: 로그인·로그아웃, 비밀번호 변경 우선, 자동 로그아웃, 회사 등록→관리자 메뉴, 업로드, 승인 → 사원 "지급 예정" |
 | `test_browser_login.py` | 4 | 실제 브라우저 로그인·재시도 |
 | `test_browser_mobile.py` | 3 | 390×844: 하단 탭 이동·터치 영역 44px·챗봇 버튼과 탭바 겹침 없음, 비품 신청·확정·내역, 새로고침 후 로그인 유지, 챗봇 전체 화면, PWA manifest·서비스 워커·오프라인 화면 |

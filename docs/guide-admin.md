@@ -415,6 +415,7 @@ python scripts/deploy_check.py https://officegenie.example.com https://mcp.offic
 | AI 앱에서 MCP 연결 시 401 | 토큰이 틀렸거나 폐기된 토큰, 또는 계정이 잠금·비활성 상태입니다. 사원이 홈의 AI 앱 연결 카드에서 새로 발급하면 바로 쓸 수 있습니다(재시작 불필요). 웹과 MCP 서버의 `DATABASE_URL`이 같은지도 확인하세요. |
 | `deploy.sh`가 web 또는 mcp에서 실패 | 출력된 로그 50줄을 봅니다. "DATABASE_URL이 없습니다"면 `.env.production`을 확인하세요(운영 모드는 SQLite로 동작하지 않음). |
 | https 주소가 열리지 않음 / 인증서 오류 | 도메인이 탄력적 IP를 가리키는지(`nslookup`), 보안 그룹에 80·443이 열려 있는지 확인하고 `bash deploy/logs.sh caddy`를 봅니다. |
+| 화면에 `chevron_right`·`keyboard_arrow_down` 같은 글자가 보이고 아이콘이 깨짐 | 아이콘 글꼴을 받지 못한 것입니다. 최신 `Caddyfile`(HTTP/3 끔)로 `bash deploy/deploy.sh`를 다시 실행하세요. 보안 그룹에 UDP 443을 따로 열 필요는 없습니다. 브라우저에서는 한 번 새로고침합니다. |
 | `permission denied ... docker.sock` | `setup_server.sh` 뒤에 접속을 끊고 다시 접속하지 않은 것입니다. |
 | EC2 Instance Connect 접속 실패 | SSH 규칙 소스에 `com.amazonaws.ap-northeast-2.ec2-instance-connect` 접두사 목록이 있는지 확인하세요. |
 | Windows에서 한글 깨짐 | `chcp 65001` 입력 후 다시 실행하세요. |
