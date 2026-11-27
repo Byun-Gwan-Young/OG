@@ -21,12 +21,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hmac
 import logging
 import math
 import os
 import re
 import sys
+import unicodedata
 from functools import wraps
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
@@ -1464,6 +1467,314 @@ def ui_list_notices(company_id: str, employee_id: str) -> dict:
     if err:
         return err
     return ok(data={"announcements": storage.list_announcements(company_id, public_only=True)})
+
+
+# ---------------------------------------------------------------------------
+# 자료실 (UI 전용. LLM 툴로 공개하지 않는다)
+# ---------------------------------------------------------------------------
+
+RESOURCE_MAX_BYTES = 5 * 1024 * 1024
+RESOURCE_CATEGORIES = ("양식", "가이드", "교육 자료", "부서 자료", "기타")
+# 확장자 → (MIME, 파일 앞부분 확인 규칙). MIME은 클라이언트 값을 믿지 않고 확장자로 정한다.
+RESOURCE_TYPES: dict[str, tuple[str, tuple[bytes, ...] | None]] = {
+    "pdf": ("application/pdf", (b"%PDF",)),
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", (b"PK\x03\x04",)),
+    "xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", (b"PK\x03\x04",)),
+    "pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation", (b"PK\x03\x04",)),
+    # 한글 문서: HWP 5.0(OLE 복합 문서) 또는 HWPX(zip)
+    "hwp": ("application/x-hwp", (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", b"PK\x03\x04")),
+    "png": ("image/png", (b"\x89PNG\r\n\x1a\n",)),
+    "jpg": ("image/jpeg", (b"\xff\xd8\xff",)),
+    "jpeg": ("image/jpeg", (b"\xff\xd8\xff",)),
+    "txt": ("text/plain; charset=utf-8", None),
+}
+RESOURCE_ALLOWED_LABEL = "pdf, docx, xlsx, pptx, hwp, png, jpg, txt"
+MSG.update(
+    {
+        "RESOURCE_TYPE": f"허용하지 않는 파일 형식입니다. 올릴 수 있는 형식: {RESOURCE_ALLOWED_LABEL}",
+        "RESOURCE_MISMATCH": "파일 내용이 확장자와 맞지 않습니다. 원본 파일을 다시 선택해 주세요.",
+        "RESOURCE_EMPTY": "빈 파일은 올릴 수 없습니다.",
+        "RESOURCE_URL": "링크는 http:// 또는 https://로 시작하는 주소만 등록할 수 있습니다.",
+        "RESOURCE_TITLE": "제목을 1자 이상 200자 이하로 입력해 주세요.",
+        "RESOURCE_DESCRIPTION": "설명은 1000자 이하로 입력해 주세요.",
+        "RESOURCE_CATEGORY": "카테고리를 목록에서 선택해 주세요.",
+        "RESOURCE_DEPARTMENT": "공개할 부서를 회사에 있는 부서 중에서 선택해 주세요.",
+        "RESOURCE_FILE_REQUIRED": "올릴 파일을 선택해 주세요.",
+        "RESOURCE_SAVED": "자료를 저장했습니다.",
+        "RESOURCE_DELETED": "자료를 삭제했습니다.",
+    }
+)
+
+
+def _size_label(size: int) -> str:
+    return f"{size / (1024 * 1024):.1f}MB" if size >= 1024 * 1024 else f"{max(1, size // 1024)}KB"
+
+
+def safe_file_name(name: str) -> str:
+    """경로·제어 문자를 없애고 글자·숫자·공백·.-_() 만 남긴다. 확장자는 소문자로."""
+    base = re.split(r"[\\/]", str(name or ""))[-1]
+    base = unicodedata.normalize("NFC", base)
+    base = "".join(ch for ch in base if unicodedata.category(ch)[0] != "C")
+    stem, dot, ext = base.rpartition(".")
+    if not dot:
+        stem, ext = base, ""
+    stem = re.sub(r"[^\w\s().-]", "_", stem, flags=re.UNICODE)
+    stem = re.sub(r"\s+", " ", stem).strip(" .") or "file"
+    stem = re.sub(r"_+", "_", stem)[:100]
+    ext = re.sub(r"[^a-z0-9]", "", ext.lower())[:10]
+    return f"{stem}.{ext}" if ext else stem
+
+
+def _check_resource_file(file_name: str, content_base64: str) -> tuple[dict | None, dict | None]:
+    """(저장할 값, 오류 응답). 형식은 확장자 허용 목록 + 파일 앞부분으로 확인한다."""
+    name = safe_file_name(file_name)
+    ext = name.rpartition(".")[2] if "." in name else ""
+    if ext not in RESOURCE_TYPES:
+        return None, fail("RESOURCE_TYPE", MSG["RESOURCE_TYPE"])
+    text = str(content_base64 or "")
+    # base64는 원본보다 4/3배 크다. 디코딩 전에 크기를 먼저 막는다.
+    if len(text) > (RESOURCE_MAX_BYTES * 4) // 3 + 8:
+        return None, fail("RESOURCE_TOO_LARGE", f"파일 크기는 5MB 이하여야 합니다. (선택한 파일: 약 {_size_label(len(text) * 3 // 4)})")
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return None, fail("RESOURCE_MISMATCH", MSG["RESOURCE_MISMATCH"])
+    if not raw:
+        return None, fail("RESOURCE_EMPTY", MSG["RESOURCE_EMPTY"])
+    if len(raw) > RESOURCE_MAX_BYTES:
+        return None, fail("RESOURCE_TOO_LARGE", f"파일 크기는 5MB 이하여야 합니다. (선택한 파일: {_size_label(len(raw))})")
+    mime, signatures = RESOURCE_TYPES[ext]
+    if signatures is not None and not raw.startswith(signatures):
+        return None, fail("RESOURCE_MISMATCH", MSG["RESOURCE_MISMATCH"])
+    if signatures is None:
+        try:
+            raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                raw = raw.decode("cp949").encode("utf-8")  # 한글 윈도 텍스트는 UTF-8로 바꿔 저장
+            except UnicodeDecodeError:
+                return None, fail("RESOURCE_MISMATCH", MSG["RESOURCE_MISMATCH"])
+    return {"file_name": name, "mime_type": mime, "size_bytes": len(raw), "content": raw}, None
+
+
+def _check_resource_url(url: str) -> str | None:
+    value = str(url or "").strip()
+    if (
+        not re.fullmatch(r"https?://[^\s<>\"']{3,1000}", value, flags=re.IGNORECASE)
+        or len(value) > 1000
+    ):
+        return None
+    return value
+
+
+def _company_departments(company_id: str) -> set[str]:
+    return {e["department"] for e in load(company_id, "employees").get("employees", []) if e.get("department")}
+
+
+def _resource_visible_to(resource: dict, department: str) -> bool:
+    """사원에게 보이는 자료: 공개 상태이고, 전체 공개이거나 본인 부서 전용."""
+    if not resource.get("is_public"):
+        return False
+    if resource.get("visibility") == "all":
+        return True
+    return resource.get("visibility") == "department" and resource.get("department") == department
+
+
+def _resource_public(resource: dict) -> dict:
+    return {k: resource.get(k) for k in storage._RESOURCE_META if k != "created_by"}
+
+
+def _policy_shelf(company_id: str) -> list[dict]:
+    """규정집: 카테고리별 묶음. 회사 내규를 먼저, 표준 참고 조문은 뒤에(참고용)."""
+    groups: dict[tuple[bool, str], list[dict]] = {}
+    for policy in load(company_id, "policies").get("policies", []):
+        reference = policy.get("policy_type", "company") != "company"
+        groups.setdefault((reference, policy.get("category") or "기타"), []).append(
+            {k: policy.get(k) for k in ("id", "article", "title", "content")}
+        )
+    ordered = sorted(groups.items(), key=lambda item: item[0][0])  # 안정 정렬: 같은 종류 안은 원래 순서
+    return [
+        {"category": category, "is_reference_only": reference, "policies": rows}
+        for (reference, category), rows in ordered
+    ]
+
+
+@mcp.tool
+@_storage_safe
+def ui_list_resources(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 자료실(사원): 볼 수 있는 자료(파일 바이트 제외), 규정집, 소속 부서 인수인계서.
+
+    다른 부서 전용 자료와 비공개 자료는 목록에 넣지 않는다.
+    """
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    visible = [
+        _resource_public(r) for r in storage.list_resources(company_id)
+        if _resource_visible_to(r, me["department"])
+    ]
+    handovers = [
+        {k: h.get(k) for k in ("handover_id", "title", "summary", "notes", "last_updated")}
+        for h in load(company_id, "handovers").get("handovers", [])
+        if h.get("department") == me["department"]
+    ]
+    return ok(
+        data={
+            "department": me["department"],
+            "resources": visible,
+            "policies": _policy_shelf(company_id),
+            "handovers": handovers,
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_download_resource(company_id: str, employee_id: str, resource_id: str) -> dict:
+    """[UI 전용] 자료 내려받기. 권한(공개 여부·부서)을 서버에서 다시 확인한 뒤 파일 바이트를 준다."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    resource = storage.get_resource(company_id, resource_id, with_content=True)
+    if resource is None or not _resource_visible_to(resource, me["department"]):
+        if resource is not None:
+            log.warning(
+                "resource download denied company_id=%s employee_id=%s resource_id=%s",
+                company_id, me["employee_id"], resource_id,
+            )
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return _resource_download_payload(resource)
+
+
+def _resource_download_payload(resource: dict) -> dict:
+    if resource["kind"] == "link":
+        return ok(data={"kind": "link", "url": resource["url"], "title": resource["title"]})
+    return ok(
+        data={
+            "kind": "file",
+            "file_name": resource["file_name"],
+            "mime_type": resource["mime_type"],
+            "size_bytes": resource["size_bytes"],
+            "content_base64": base64.b64encode(resource["content"] or b"").decode("ascii"),
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_resources(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 자료실 관리: 회사의 모든 자료(비공개 포함, 파일 바이트 제외)."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    return ok(
+        data={
+            "resources": [_resource_public(r) for r in storage.list_resources(company_id)],
+            "categories": list(RESOURCE_CATEGORIES),
+            "departments": sorted(_company_departments(company_id)),
+            "max_bytes": RESOURCE_MAX_BYTES,
+            "allowed_types": RESOURCE_ALLOWED_LABEL,
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_download_resource(company_id: str, actor_account_id: str, resource_id: str) -> dict:
+    """[UI 전용·관리자] 관리자 확인용 내려받기(비공개 자료 포함, 같은 회사만)."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    resource = storage.get_resource(company_id, resource_id, with_content=True)
+    if resource is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return _resource_download_payload(resource)
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_save_resource(
+    company_id: str,
+    actor_account_id: str,
+    title: str,
+    category: str,
+    kind: Literal["file", "link"],
+    description: str = "",
+    url: str = "",
+    file_name: str = "",
+    content_base64: str = "",
+    visibility: Literal["all", "department"] = "all",
+    department: str = "",
+    is_public: bool = True,
+    resource_id: str | None = None,
+) -> dict:
+    """[UI 전용·관리자] 자료 등록·수정(파일 업로드 또는 링크). 형식·크기 위반은 이유와 함께 거부.
+
+    수정할 때 새 파일을 주지 않으면 기존 파일을 유지한다. 모든 변경은 감사 로그에 남는다.
+    """
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    title = str(title or "").strip()
+    description = str(description or "").strip()
+    if not title or len(title) > 200:
+        return fail("RESOURCE_INVALID", MSG["RESOURCE_TITLE"])
+    if len(description) > 1000:
+        return fail("RESOURCE_INVALID", MSG["RESOURCE_DESCRIPTION"])
+    if category not in RESOURCE_CATEGORIES:
+        return fail("RESOURCE_INVALID", MSG["RESOURCE_CATEGORY"])
+    if visibility not in ("all", "department") or kind not in ("file", "link"):
+        return fail("RESOURCE_INVALID", MSG["INVALID_INPUT"])
+    department = str(department or "").strip()
+    if visibility == "department":
+        if department not in _company_departments(company_id):
+            return fail("RESOURCE_INVALID", MSG["RESOURCE_DEPARTMENT"])
+    else:
+        department = ""
+    existing = storage.get_resource(company_id, resource_id) if resource_id else None
+    if resource_id and existing is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    values: dict[str, Any] = {
+        "title": title,
+        "category": category,
+        "description": description,
+        "kind": kind,
+        "visibility": visibility,
+        "department": department or None,
+        "is_public": bool(is_public),
+    }
+    if kind == "link":
+        checked_url = _check_resource_url(url)
+        if checked_url is None:
+            return fail("RESOURCE_URL", MSG["RESOURCE_URL"])
+        values["url"] = checked_url
+    else:
+        values["url"] = None
+        if content_base64:
+            file_values, error = _check_resource_file(file_name, content_base64)
+            if error:
+                return error
+            values.update(file_values)
+        elif existing is None or existing["kind"] != "file":
+            return fail("RESOURCE_FILE_REQUIRED", MSG["RESOURCE_FILE_REQUIRED"])
+        else:
+            values["content"] = None  # 기존 파일 유지
+    saved = storage.admin_save_resource(company_id, actor_account_id, resource_id, values)
+    if saved is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return ok("SAVED", data={"resource": _resource_public(saved)}, message=MSG["RESOURCE_SAVED"])
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_delete_resource(company_id: str, actor_account_id: str, resource_id: str) -> dict:
+    """[UI 전용·관리자] 자료 삭제(같은 회사만). 감사 로그에 남는다."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    if not storage.admin_delete_resource(company_id, actor_account_id, resource_id):
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return ok("DELETED", message=MSG["RESOURCE_DELETED"])
 
 
 @mcp.tool

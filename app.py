@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import html
@@ -2022,6 +2023,10 @@ def _render_shell_styles() -> None:
             .st-key-notice_board, .st-key-library_board, .st-key-equipment_board { padding: 16px; }
             [class*="st-key-notice_admin_row_"] { flex-wrap: wrap !important; }
             [class*="st-key-notice_admin_row_"] > div:first-child { flex-basis: 100% !important; }
+            [class*="st-key-lib_"][class*="_row_"], [class*="st-key-admin_res_row_"] { flex-wrap: wrap !important; }
+            [class*="st-key-lib_"][class*="_row_"] > div:nth-child(2),
+            [class*="st-key-admin_res_row_"] > div:nth-child(2) { flex-basis: calc(100% - 60px) !important; }
+            .handover-body { padding-left: 18px; }
         }
 
         /* ---- 공지사항 ---- */
@@ -2050,6 +2055,60 @@ def _render_shell_styles() -> None:
         .st-key-notice_inline_form {
             margin: 8px 0 12px; padding: 18px 20px; border-radius: 12px;
             background: var(--page); border: 1px solid var(--input-line);
+        }
+
+        /* ---- 자료실 ---- */
+        [class*="st-key-lib_"][class*="_row_"], [class*="st-key-admin_res_row_"] {
+            min-height: 72px; padding: 10px 4px; border-bottom: 1px solid #E7ECF3;
+        }
+        [class*="st-key-lib_"][class*="_row_"] > div:nth-child(2),
+        [class*="st-key-admin_res_row_"] > div:nth-child(2) { flex: 1 1 auto !important; min-width: 0; }
+        .resource-icon {
+            display: inline-grid; place-items: center; width: 44px; height: 44px; flex: 0 0 44px;
+            border-radius: 11px; background: var(--blue-soft); color: var(--blue);
+            font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+        }
+        .resource-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .resource-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .resource-title strong { color: var(--title); font-size: 15px; font-weight: 650; }
+        .resource-chip {
+            display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
+            border-radius: var(--radius-pill); background: var(--page); color: var(--muted);
+            font-size: 11px; font-weight: 650;
+        }
+        .resource-chip.dept { background: var(--green-bg); color: var(--green); }
+        .resource-chip.muted { background: #EEF2F6; color: var(--muted); }
+        .resource-desc { margin: 0; color: var(--body); font-size: 13px; line-height: 1.5; }
+        .resource-meta { color: var(--muted); font-size: 12px; }
+        [class*="st-key-lib_"] :is(button, a), [class*="st-key-admin_res_"] :is(button, a) { min-height: 40px; white-space: nowrap; }
+        details.handover-card, details.policy-group {
+            margin: 8px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+        }
+        details.handover-card > summary, details.policy-group > summary {
+            display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 8px 14px;
+            cursor: pointer; list-style: none;
+        }
+        details.handover-card > summary::-webkit-details-marker,
+        details.policy-group > summary::-webkit-details-marker { display: none; }
+        details.policy-group > summary strong { color: var(--title); font-size: 15px; }
+        details.policy-group > summary .card-count { margin-left: auto; padding-top: 0; }
+        details.policy-group .notice-list { margin: 0 14px 8px; }
+        .handover-body { padding: 0 18px 16px 70px; color: var(--body); font-size: 14px; }
+        .handover-body h4 { margin: 12px 0 4px; padding: 0 !important; font-size: 14px; color: var(--title); }
+        .handover-body ul { margin: 0; padding-left: 18px; line-height: 1.7; }
+        .ref-badge, .own-badge {
+            display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
+            border-radius: var(--radius-pill); font-size: 11px; font-style: normal; font-weight: 700;
+        }
+        .ref-badge { background: var(--amber-bg); color: var(--amber); }
+        .own-badge { background: var(--blue-soft); color: var(--blue); }
+        .st-key-resource_form {
+            margin: 8px 0 16px; padding: 18px 20px; border-radius: 12px;
+            background: var(--page); border: 1px solid var(--input-line);
+        }
+        .st-key-resource_delete_confirm {
+            padding: 10px 14px; border-radius: var(--radius-control);
+            background: var(--amber-bg); border: 1px solid #EED9AE;
         }
 
         /* ---- 모바일 하단 탭바: PC에서는 숨긴다 ---- */
@@ -3878,11 +3937,6 @@ def _employee_sidebar(agent: OfficeGenieAgent, auth: dict) -> dict | None:
     return result.get("data") or {}
 
 
-def _page_employee_library(agent: OfficeGenieAgent, auth: dict) -> None:
-    _page_heading("자료실", "회사 규정과 부서 자료를 한곳에서 찾아보세요.")
-    st.info("자료실을 준비하고 있습니다.")
-
-
 def _page_employee_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
     _page_heading("비품 신청", "필요한 비품을 신청하고 진행 상황을 확인하세요.")
     data = _employee_sidebar(agent, auth)
@@ -4164,6 +4218,368 @@ def _page_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 자료실
+# ---------------------------------------------------------------------------
+
+LIBRARY_TABS = ("전체", "규정집", "부서 자료", "양식·기타")
+RESOURCE_UPLOAD_TYPES = ["pdf", "docx", "xlsx", "pptx", "hwp", "png", "jpg", "jpeg", "txt"]
+RESOURCE_MAX_MB = 5
+_RESOURCE_ICONS = {
+    "link": ":material/link:", "pdf": ":material/picture_as_pdf:", "png": ":material/image:",
+    "jpg": ":material/image:", "jpeg": ":material/image:", "xlsx": ":material/table_chart:",
+    "pptx": ":material/slideshow:", "docx": ":material/description:", "hwp": ":material/description:",
+    "txt": ":material/article:",
+}
+
+
+def _resource_ext(resource: dict) -> str:
+    name = str(resource.get("file_name") or "")
+    return name.rpartition(".")[2].lower() if "." in name else ""
+
+
+def _size_text(size: object) -> str:
+    try:
+        size = int(size or 0)
+    except (TypeError, ValueError):
+        return ""
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f}MB"
+    return f"{max(1, size // 1024)}KB"
+
+
+def _resource_matches(resource: dict, query: str) -> bool:
+    return not query or any(
+        query in _manager_term(resource.get(field)) for field in ("title", "description", "category", "file_name")
+    )
+
+
+def _download_loader(tool: str, auth: dict, resource_id: str, admin: bool = False):
+    """다운로드 버튼을 누를 때만 서버에서 파일을 받는다(서버가 권한을 다시 확인)."""
+    agent = get_agent()
+    company_id = auth["company_id"]
+    identity = auth["account_id"] if admin else auth["employee_id"]
+
+    def load() -> bytes:
+        if admin:
+            result = agent.admin_call(tool, company_id, identity, resource_id=resource_id)
+        else:
+            result = agent.employee_call(tool, company_id, identity, resource_id=resource_id)
+        data = result.get("data") or {}
+        if not result.get("ok") or data.get("kind") != "file":
+            return (result.get("message") or CONNECTION_ERROR).encode("utf-8")
+        return base64.b64decode(data["content_base64"])
+
+    return load
+
+
+def _resource_meta_html(resource: dict, *, admin: bool = False) -> str:
+    kind = "링크" if resource["kind"] == "link" else (_resource_ext(resource).upper() or "파일")
+    parts = [kind]
+    if resource["kind"] == "file" and resource.get("size_bytes"):
+        parts.append(_size_text(resource["size_bytes"]))
+    parts.append(_date_label(resource.get("updated_at")))
+    chips = f"<span class='resource-chip'>{_escape(resource.get('category'))}</span>"
+    if resource.get("visibility") == "department":
+        chips += f"<span class='resource-chip dept'>{_escape(resource.get('department'))} 전용</span>"
+    if admin and not resource.get("is_public"):
+        chips += "<span class='resource-chip muted'>비공개</span>"
+    description = (
+        f"<p class='resource-desc'>{_escape(resource.get('description'))}</p>" if resource.get("description") else ""
+    )
+    return (
+        f"<div class='resource-text'><div class='resource-title'><strong>{_escape(resource['title'])}</strong>{chips}</div>"
+        f"{description}<span class='resource-meta'>{_escape(' · '.join(parts))}</span></div>"
+    )
+
+
+def _resource_action(resource: dict, auth: dict, key: str, *, admin: bool = False) -> None:
+    if resource["kind"] == "link":
+        st.link_button("열기", resource.get("url") or "#", icon=":material/open_in_new:")
+        return
+    st.download_button(
+        "내려받기",
+        data=_download_loader(
+            "ui_admin_download_resource" if admin else "ui_download_resource",
+            auth, resource["resource_id"], admin,
+        ),
+        file_name=resource.get("file_name") or "download",
+        mime=(resource.get("mime_type") or "application/octet-stream").split(";")[0],
+        key=key,
+        icon=":material/download:",
+        on_click="ignore",
+    )
+
+
+def _render_resource_rows(resources: list[dict], auth: dict, prefix: str) -> None:
+    for resource in resources:
+        rid = resource["resource_id"]
+        with st.container(key=f"{prefix}_row_{rid}", horizontal=True, vertical_alignment="center", gap="small"):
+            st.markdown(
+                f"<span class='resource-icon'>{_escape(_resource_ext(resource) or 'URL')}</span>",
+                unsafe_allow_html=True, width="content",
+            )
+            st.markdown(_resource_meta_html(resource), unsafe_allow_html=True)
+            _resource_action(resource, auth, f"{prefix}_get_{rid}")
+
+
+def _empty_html(title: str, hint: str = "") -> str:
+    hint_html = f"<span>{_escape(hint)}</span>" if hint else ""
+    return f"<div class='empty-state'><strong>{_escape(title)}</strong>{hint_html}</div>"
+
+
+def _handover_html(handover: dict) -> str:
+    sections = "".join(
+        f"<h4>{_escape(heading)}</h4><ul>"
+        + "".join(f"<li>{_escape(item)}</li>" for item in (items if isinstance(items, list) else [items]))
+        + "</ul>"
+        for heading, items in (handover.get("summary") or {}).items()
+    )
+    notes = handover.get("notes") or []
+    notes_html = (
+        "<h4>주의사항</h4><ul>" + "".join(f"<li>{_escape(n)}</li>" for n in notes) + "</ul>" if notes else ""
+    )
+    updated = f" · 최종 수정 {_escape(handover['last_updated'])}" if handover.get("last_updated") else ""
+    return (
+        "<details class='handover-card'><summary>"
+        f"<span class='resource-icon'>DOC</span><span class='resource-text'><strong>{_escape(handover.get('title'))}</strong>"
+        f"<span class='resource-meta'>인수인계서{updated}</span></span></summary>"
+        f"<div class='handover-body'>{sections}{notes_html}</div></details>"
+    )
+
+
+def _policy_shelf_html(groups: list[dict], query: str) -> tuple[str, int]:
+    blocks, total = [], 0
+    for group in groups:
+        rows = [
+            p for p in group["policies"]
+            if not query or any(query in _manager_term(p.get(f)) for f in ("title", "article", "content"))
+        ]
+        if not rows:
+            continue
+        total += len(rows)
+        badge = "<em class='ref-badge'>참고용</em>" if group["is_reference_only"] else "<em class='own-badge'>회사 내규</em>"
+        items = "".join(
+            "<details class='notice-entry notice-page-entry'><summary class='notice-row'>"
+            f"<span class='notice-title'>{_escape(p.get('article'))} {_escape(p.get('title'))}</span></summary>"
+            f"<div class='notice-body'>{_escaped_lines(p.get('content'))}</div></details>"
+            for p in rows
+        )
+        blocks.append(
+            f"<details class='policy-group'{' open' if query else ''}><summary><strong>{_escape(group['category'])}</strong>"
+            f"{badge}<span class='card-count'>{len(rows)}개 조항</span></summary>"
+            f"<div class='notice-list'>{items}</div></details>"
+        )
+    note = (
+        "<p class='widget-note'>‘참고용’은 회사 자체 규정이 아닌 표준취업규칙 참고 조문입니다.</p>"
+        if any(g["is_reference_only"] for g in groups) else ""
+    )
+    return note + "".join(blocks), total
+
+
+def _page_employee_library(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("자료실", "회사 규정과 부서 자료, 양식을 한곳에서 찾아보세요.")
+    result = agent.employee_call("ui_list_resources", auth["company_id"], auth["employee_id"])
+    if result.get("code") == "INVALID_SESSION":
+        _logout(result.get("message", ""))
+        st.rerun()
+    if not result.get("ok"):
+        _read_error(result.get("message"), "employee_library")
+        return
+    data = result["data"]
+    with st.container(key="library_board", gap=None):
+        query = _manager_term(
+            st.text_input(
+                "자료 검색", key="library_query", placeholder="제목이나 설명으로 검색",
+                label_visibility="collapsed", icon=":material/search:",
+            )
+        )
+        resources = [r for r in data["resources"] if _resource_matches(r, query)]
+        dept_resources = [r for r in resources if r["visibility"] == "department"]
+        common = [r for r in resources if r["visibility"] != "department"]
+        handovers = [
+            h for h in data["handovers"]
+            if not query or query in _manager_term(h.get("title")) or query in _manager_term(json.dumps(h.get("summary"), ensure_ascii=False))
+        ]
+        tabs = st.tabs(list(LIBRARY_TABS), key="library_tabs", on_change="rerun")
+        for tab, name in zip(tabs, LIBRARY_TABS):
+            if not tab.open:
+                continue
+            with tab:
+                if name == "규정집":
+                    html_text, total = _policy_shelf_html(data["policies"], query)
+                    st.markdown(
+                        html_text if total else _empty_html("찾는 규정이 없습니다." if query else "등록된 규정이 없습니다."),
+                        unsafe_allow_html=True,
+                    )
+                    continue
+                if name == "부서 자료":
+                    st.markdown(
+                        f"<p class='list-count'>{_escape(data['department'])} 자료 · "
+                        f"{len(handovers) + len(dept_resources)}건</p>"
+                        + "".join(_handover_html(h) for h in handovers),
+                        unsafe_allow_html=True,
+                    )
+                    _render_resource_rows(dept_resources, auth, "lib_dept")
+                    if not handovers and not dept_resources:
+                        st.markdown(_empty_html("소속 부서 자료가 없습니다.", "부서 자료는 같은 부서 사원에게만 보입니다."), unsafe_allow_html=True)
+                    continue
+                rows = common if name == "양식·기타" else resources
+                if name == "전체":
+                    st.markdown(
+                        f"<p class='list-count'>파일·링크 {len(rows)}건 · 인수인계서 {len(handovers)}건 · "
+                        "규정은 ‘규정집’ 탭에서 볼 수 있습니다.</p>"
+                        + "".join(_handover_html(h) for h in handovers),
+                        unsafe_allow_html=True,
+                    )
+                _render_resource_rows(rows, auth, f"lib_{LIBRARY_TABS.index(name)}")
+                if not rows and (name != "전체" or not handovers):
+                    st.markdown(
+                        _empty_html("검색 결과가 없습니다." if query else "아직 등록된 자료가 없습니다.",
+                                    "다른 단어로 검색해 보세요." if query else "관리자가 자료를 올리면 여기에 표시됩니다."),
+                        unsafe_allow_html=True,
+                    )
+
+
+# ---- 자료실 관리(관리자) -------------------------------------------------------
+
+_RESOURCE_FORM_KEYS = (
+    "res_title", "res_category", "res_desc", "res_kind", "res_url", "res_visibility", "res_department", "res_public",
+)
+
+
+def _resource_form_open(resource: dict | None) -> None:
+    state = st.session_state
+    resource = resource or {}
+    state.resource_editing = resource.get("resource_id") or "new"
+    state.res_title = resource.get("title", "")
+    state.res_category = resource.get("category")
+    state.res_desc = resource.get("description") or ""
+    state.res_kind = "링크" if resource.get("kind") == "link" else "파일"
+    state.res_url = resource.get("url") or ""
+    state.res_visibility = "특정 부서" if resource.get("visibility") == "department" else "전체"
+    state.res_department = resource.get("department")
+    state.res_public = bool(resource.get("is_public", True))
+    state.res_uploader_n = state.get("res_uploader_n", 0) + 1
+    state.pop("resource_delete", None)
+
+
+def _resource_form_close() -> None:
+    st.session_state.pop("resource_editing", None)
+    for key in _RESOURCE_FORM_KEYS:
+        st.session_state.pop(key, None)
+
+
+def _resource_save(agent: OfficeGenieAgent, auth: dict) -> None:
+    state = st.session_state
+    editing = state.get("resource_editing")
+    uploaded = state.get(f"res_file_{state.get('res_uploader_n', 0)}")
+    kind = "link" if state.get("res_kind") == "링크" else "file"
+    content = ""
+    file_name = ""
+    if kind == "file" and uploaded is not None:
+        raw = uploaded.getvalue()
+        if len(raw) > RESOURCE_MAX_MB * 1024 * 1024:
+            state.resource_error = f"파일 크기는 {RESOURCE_MAX_MB}MB 이하여야 합니다. (선택한 파일: {_size_text(len(raw))})"
+            return
+        content = base64.b64encode(raw).decode("ascii")
+        file_name = uploaded.name
+    result = _admin(
+        agent, auth, "ui_admin_save_resource",
+        title=state.get("res_title", ""), category=state.get("res_category") or "",
+        description=state.get("res_desc", ""), kind=kind, url=state.get("res_url", ""),
+        file_name=file_name, content_base64=content,
+        visibility="department" if state.get("res_visibility") == "특정 부서" else "all",
+        department=state.get("res_department") or "", is_public=bool(state.get("res_public", True)),
+        resource_id=None if editing == "new" else editing,
+    )
+    if not result.get("ok"):
+        state.resource_error = result.get("message") or CONNECTION_ERROR
+        return
+    state.manager_success = result.get("message") or "자료를 저장했습니다."
+    _resource_form_close()
+
+
+def _resource_delete(agent: OfficeGenieAgent, auth: dict, resource_id: str) -> None:
+    result = _admin(agent, auth, "ui_admin_delete_resource", resource_id=resource_id)
+    st.session_state.pop("resource_delete", None)
+    if result.get("ok"):
+        st.session_state.manager_success = result.get("message") or "자료를 삭제했습니다."
+    else:
+        st.session_state.resource_error = result.get("message") or CONNECTION_ERROR
+
+
+def _render_resource_form(agent: OfficeGenieAgent, auth: dict, data: dict) -> None:
+    state = st.session_state
+    editing = state.get("resource_editing")
+    with st.container(key="resource_form"):
+        _manager_heading("자료 등록" if editing == "new" else "자료 수정", "파일을 올리거나 링크를 등록하세요.")
+        cols = st.columns(2, gap="large")
+        cols[0].text_input("제목", key="res_title", max_chars=200)
+        cols[1].selectbox("카테고리", data["categories"], key="res_category", placeholder="카테고리 선택", index=None)
+        st.text_area("설명 (선택)", key="res_desc", max_chars=1000, height=90)
+        st.radio("종류", ["파일", "링크"], key="res_kind", horizontal=True)
+        if state.get("res_kind") == "링크":
+            st.text_input("링크 주소", key="res_url", placeholder="https://")
+        else:
+            st.file_uploader(
+                f"파일 ({data['allowed_types']} · {RESOURCE_MAX_MB}MB 이하)",
+                type=RESOURCE_UPLOAD_TYPES, max_upload_size=RESOURCE_MAX_MB,
+                key=f"res_file_{state.get('res_uploader_n', 0)}",
+            )
+            if editing != "new":
+                st.caption("새 파일을 고르지 않으면 기존 파일을 그대로 둡니다.")
+        cols = st.columns(2, gap="large")
+        cols[0].radio("공개 범위", ["전체", "특정 부서"], key="res_visibility", horizontal=True)
+        if state.get("res_visibility") == "특정 부서":
+            cols[1].selectbox("부서", data["departments"], key="res_department", index=None, placeholder="부서 선택")
+        st.toggle("사원에게 공개", key="res_public")
+        error = state.pop("resource_error", "")
+        if error:
+            st.error(error)
+        with st.container(horizontal=True, horizontal_alignment="right"):
+            st.button("취소", key="resource_cancel", on_click=_resource_form_close)
+            st.button("저장", key="resource_save", type="primary", on_click=_resource_save, args=(agent, auth))
+
+
+def _page_admin_library(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("자료실 관리", "사원에게 공유할 파일과 링크를 올리고 공개 범위를 정하세요.")
+    data = _admin_read(agent, auth, "ui_admin_list_resources")
+    if data is None:
+        return
+    resources = data["resources"]
+    with st.container(key="manager_card"):
+        error = st.session_state.get("resource_error") if not st.session_state.get("resource_editing") else ""
+        if error:
+            st.session_state.pop("resource_error", None)
+            st.error(error)
+        with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+            _manager_heading("자료 목록", f"형식: {data['allowed_types']} · 파일당 {RESOURCE_MAX_MB}MB 이하", f"총 {len(resources)}건")
+            st.button("＋ 자료 등록", key="resource_new", type="primary", on_click=_resource_form_open, args=(None,))
+        if st.session_state.get("resource_editing"):
+            _render_resource_form(agent, auth, data)
+        if not resources:
+            st.markdown(_empty_html("등록된 자료가 없습니다.", "‘＋ 자료 등록’으로 양식이나 안내 자료를 올려 보세요."), unsafe_allow_html=True)
+            return
+        query = _manager_term(st.text_input("자료 검색", key="admin_library_query", placeholder="제목·설명 검색", label_visibility="collapsed", icon=":material/search:"))
+        rows = [r for r in resources if _resource_matches(r, query)]
+        if not rows:
+            st.info("표시할 검색 결과가 없습니다.")
+        for resource in rows:
+            rid = resource["resource_id"]
+            with st.container(key=f"admin_res_row_{rid}", horizontal=True, vertical_alignment="center", gap="small"):
+                st.markdown(f"<span class='resource-icon'>{_escape(_resource_ext(resource) or 'URL')}</span>", unsafe_allow_html=True, width="content")
+                st.markdown(_resource_meta_html(resource, admin=True), unsafe_allow_html=True)
+                _resource_action(resource, auth, f"admin_res_get_{rid}", admin=True)
+                st.button("수정", key=f"admin_res_edit_{rid}", on_click=_resource_form_open, args=(resource,))
+                st.button("삭제", key=f"admin_res_delete_{rid}", on_click=lambda r=rid: st.session_state.update(resource_delete=r))
+            if st.session_state.get("resource_delete") == rid:
+                with st.container(key="resource_delete_confirm", horizontal=True, vertical_alignment="center"):
+                    st.markdown(f"<span class='preview-label'>‘{_escape(resource['title'])}’을(를) 삭제할까요? 되돌릴 수 없습니다.</span>", unsafe_allow_html=True)
+                    st.button("삭제 확인", key="resource_delete_yes", type="primary", on_click=_resource_delete, args=(agent, auth, rid))
+                    st.button("취소", key="resource_delete_no", on_click=lambda: st.session_state.pop("resource_delete", None))
+
+
+# ---------------------------------------------------------------------------
 # 관리자 메뉴. 모든 호출은 agent.admin_call로 가고, 서버가 관리자 여부를 다시 확인한다.
 # ---------------------------------------------------------------------------
 
@@ -4178,11 +4594,6 @@ def _admin_section_tabs(key: str, sections: list[tuple[str, str, object]]) -> No
                     selection = st.session_state.get(f"manager_{section}_selection", (None, None))
                     with _view_container(selection, f"_manager_{section}_slot"):
                         render()
-
-
-def _page_admin_library(agent: OfficeGenieAgent, auth: dict) -> None:
-    _page_heading("자료실 관리", "사원에게 공유할 파일과 링크를 관리하세요.")
-    st.info("자료실을 준비하고 있습니다.")
 
 
 def _page_admin_equipment(agent: OfficeGenieAgent, auth: dict) -> None:

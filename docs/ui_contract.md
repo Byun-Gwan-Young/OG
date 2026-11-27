@@ -135,6 +135,32 @@ agent.employee_call("ui_list_notices", company_id, employee_id)
 - 관리자 "공지사항 관리"는 기존 `ui_admin_list_announcements` / `ui_admin_save_announcement`를 그대로 쓴다
   (목록에서 바로 수정·공개 전환).
 
+### 2-2-3. 자료실
+
+```python
+agent.employee_call("ui_list_resources", company_id, employee_id)
+# → {"department", "resources": [볼 수 있는 자료(파일 바이트 제외)], "policies": [{category, is_reference_only,
+#    policies: [{id, article, title, content}]}](회사 내규 먼저), "handovers": [소속 부서 인수인계서]}
+agent.employee_call("ui_download_resource", company_id, employee_id, resource_id="RES-…")
+# → 파일: {"kind": "file", "file_name", "mime_type", "size_bytes", "content_base64"}
+#   링크: {"kind": "link", "url", "title"}
+#   다른 부서 전용·비공개·없는 자료: {"ok": False, "code": "NOT_FOUND", "message": MSG["DENIED_OR_NOT_FOUND"]}
+
+agent.admin_call("ui_admin_list_resources", company_id, account_id)
+# → {"resources": [비공개 포함, 바이트 제외], "categories", "departments", "max_bytes", "allowed_types"}
+agent.admin_call("ui_admin_download_resource", company_id, account_id, resource_id=...)
+agent.admin_call("ui_admin_save_resource", company_id, account_id, title=..., category=..., kind="file"|"link",
+                 description="", url="", file_name="", content_base64="", visibility="all"|"department",
+                 department="", is_public=True, resource_id=None)
+# 실패 코드: RESOURCE_TYPE(허용 형식 아님) · RESOURCE_MISMATCH(내용이 확장자와 다름) · RESOURCE_TOO_LARGE(5MB 초과)
+#           RESOURCE_EMPTY · RESOURCE_URL(http/https만) · RESOURCE_INVALID(제목·카테고리·부서) · RESOURCE_FILE_REQUIRED
+agent.admin_call("ui_admin_delete_resource", company_id, account_id, resource_id=...)
+```
+
+- 허용 형식: pdf, docx, xlsx, pptx, hwp, png, jpg(jpeg), txt. MIME은 확장자로 서버가 정하고, 파일 앞부분으로 형식을 확인한다.
+  파일명은 경로·제어 문자를 지우고 정리한다. 변경(등록·수정·삭제)은 모두 감사 로그에 남고, 파일 내용은 남기지 않는다.
+- app.py는 `st.download_button(data=callable)`로 버튼을 누를 때만 파일을 받는다(서버가 그때 권한을 다시 확인).
+
 ### 2-3. 채팅 입력
 
 ```python

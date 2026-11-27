@@ -29,6 +29,7 @@ from sqlalchemy import (
     Column,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -253,6 +254,30 @@ audit_log = Table(
     Column("action", String(100), nullable=False),
     Column("target", String(300)),
     Column("detail", JSON, nullable=False, default=dict),
+)
+
+# 자료실: 관리자가 올린 파일(최대 5MB, 바이트를 DB에 저장) 또는 링크.
+# visibility="department"이면 같은 부서 사원에게만 보인다(서버에서 확인).
+resources = Table(
+    "resources",
+    metadata,
+    Column("company_id", String(100), primary_key=True),
+    Column("resource_id", String(32), primary_key=True),
+    Column("title", String(200), nullable=False),
+    Column("category", String(50), nullable=False),
+    Column("description", String),
+    Column("kind", String(10), nullable=False),
+    Column("url", String(1000)),
+    Column("file_name", String(200)),
+    Column("mime_type", String(120)),
+    Column("size_bytes", Integer),
+    Column("content", LargeBinary),
+    Column("visibility", String(20), nullable=False),
+    Column("department", String(200)),
+    Column("is_public", Boolean, nullable=False),
+    Column("created_by", String(100), nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("updated_at", String(40), nullable=False),
 )
 
 # 새로고침해도 로그인을 유지하는 서버 세션. 브라우저 쿠키에는 무작위 토큰만 두고,
@@ -2706,6 +2731,110 @@ def admin_save_announcement(
     return _run_db(operation, write=True, immediate=True)
 
 
+# ---------------------------------------------------------------------------
+# 자료실. 형식·크기·권한 검증은 mcp_server.py가 먼저 하고, 여기서는 회사 범위로만 읽고 쓴다.
+# ---------------------------------------------------------------------------
+
+_RESOURCE_META = (
+    "resource_id", "title", "category", "description", "kind", "url", "file_name",
+    "mime_type", "size_bytes", "visibility", "department", "is_public",
+    "created_by", "created_at", "updated_at",
+)
+
+
+def _resource_columns():
+    return [resources.c[name] for name in _RESOURCE_META]
+
+
+def list_resources(company_id: str) -> list[dict]:
+    """회사의 자료 목록(파일 바이트 제외), 최근 수정순."""
+    statement = (
+        select(*_resource_columns())
+        .where(resources.c.company_id == company_id)
+        .order_by(resources.c.updated_at.desc(), resources.c.resource_id.desc())
+    )
+    return _run_db(lambda conn: [dict(row) for row in conn.execute(statement).mappings()])
+
+
+def get_resource(company_id: str, resource_id: str, *, with_content: bool = False) -> dict | None:
+    columns = _resource_columns() + ([resources.c.content] if with_content else [])
+    row = _run_db(
+        lambda conn: conn.execute(
+            select(*columns).where(
+                and_(resources.c.company_id == company_id, resources.c.resource_id == str(resource_id or ""))
+            )
+        ).mappings().first()
+    )
+    return dict(row) if row else None
+
+
+def admin_save_resource(company_id: str, actor: str, resource_id: str | None, values: dict) -> dict | None:
+    """자료 추가(resource_id=None) 또는 수정. 수정 때 content가 없으면 기존 파일을 유지한다.
+
+    반환: 저장한 자료(바이트 제외). 수정 대상이 없으면 None.
+    """
+    now = _iso(_utc_now())
+    allowed = {
+        "title", "category", "description", "kind", "url", "file_name", "mime_type",
+        "size_bytes", "content", "visibility", "department", "is_public",
+    }
+    values = {k: v for k, v in values.items() if k in allowed}
+
+    def operation(conn: Connection) -> dict | None:
+        if resource_id is None:
+            new_id = f"RES-{uuid4().hex[:10].upper()}"
+            conn.execute(
+                insert(resources).values(
+                    company_id=company_id, resource_id=new_id, created_by=str(actor),
+                    created_at=now, updated_at=now, **values,
+                )
+            )
+            action, target = "resource_created", new_id
+        else:
+            key = and_(resources.c.company_id == company_id, resources.c.resource_id == resource_id)
+            if conn.execute(select(resources.c.resource_id).where(key)).first() is None:
+                return None
+            if values.get("kind") == "link":
+                values.update(file_name=None, mime_type=None, size_bytes=None, content=None)
+            elif "content" in values and values["content"] is None:
+                for name in ("content", "file_name", "mime_type", "size_bytes"):
+                    values.pop(name, None)
+            conn.execute(update(resources).where(key).values(updated_at=now, **values))
+            action, target = "resource_updated", resource_id
+        _audit(
+            conn, company_id, actor, action, target,
+            {
+                "title": values.get("title"),
+                "kind": values.get("kind"),
+                "visibility": values.get("visibility"),
+                "department": values.get("department"),
+                "is_public": values.get("is_public"),
+                "size_bytes": values.get("size_bytes"),
+            },
+        )
+        row = conn.execute(
+            select(*_resource_columns()).where(
+                and_(resources.c.company_id == company_id, resources.c.resource_id == target)
+            )
+        ).mappings().first()
+        return dict(row)
+
+    return _run_db(operation, write=True, immediate=True)
+
+
+def admin_delete_resource(company_id: str, actor: str, resource_id: str) -> bool:
+    def operation(conn: Connection) -> bool:
+        key = and_(resources.c.company_id == company_id, resources.c.resource_id == str(resource_id or ""))
+        row = conn.execute(select(resources.c.title).where(key)).mappings().first()
+        if row is None:
+            return False
+        conn.execute(delete(resources).where(key))
+        _audit(conn, company_id, actor, "resource_deleted", resource_id, {"title": row["title"]})
+        return True
+
+    return _run_db(operation, write=True, immediate=True)
+
+
 def admin_list_accounts(company_id: str) -> list[dict]:
     """사원 계정 상태(사원 목록에 있는 사람 + JSON에서 빠져 비활성인 계정)."""
 
@@ -2941,7 +3070,7 @@ def clear_tables_for_tests() -> None:
         raise RuntimeError("테스트 환경에서만 사용할 수 있습니다.")
 
     def operation(conn: Connection) -> None:
-        for table in (login_sessions, audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
+        for table in (resources, login_sessions, audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
             conn.execute(delete(table))
 
     _run_db(operation, write=True)
@@ -2953,7 +3082,7 @@ def clear_tables_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 # 테스트가 흔히 바꾸는 표. 회사 정적 데이터(규정·사원 등)는 data_version으로 변경을 감지한다.
-_BASELINE_TABLES = (tickets, announcements, accounts, audit_log, login_sessions)
+_BASELINE_TABLES = (tickets, announcements, accounts, audit_log, login_sessions, resources)
 
 
 def _require_testing() -> None:
