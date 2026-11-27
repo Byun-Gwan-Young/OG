@@ -12,6 +12,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 import storage
+from tests import datafiles as D
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = str(ROOT / "app.py")
@@ -54,7 +55,7 @@ def test_login_shows_own_dashboard_then_logout_clears_session():
     at = _login(at, code.lower(), "EMP001", _password("bridgesoft", "EMP001"))
     assert not at.exception
     page = _all_markdown(at)
-    assert "나의 온보딩" in page and "김신입" in page
+    assert "나의 온보딩" in page and D.employee("bridgesoft", "EMP001")["name"] in page
     assert "김신입(백엔드개발팀)" in page
     assert at.session_state["auth"]["employee_id"] == "EMP001"
 
@@ -188,22 +189,27 @@ def test_admin_approves_ticket_and_employee_sees_scheduled():
 
     set_admin_password.main(["bridgesoft", "--password", "admin-pass-1"])
     code = storage.get_company("bridgesoft")["company_code"]
+    # 기준 티켓 중 EMP001의 접수완료 비품 신청 하나를 승인까지 진행한다
+    target = next(
+        t for t in D.baseline_tickets_doc("bridgesoft")["tickets"]
+        if t["employee_id"] == "EMP001" and t["status"] == "접수완료" and t["type"] == "비품"
+    )
     at = _admin_app(code, "admin-pass-1")
     for step in ("검토중", "승인"):
-        at.selectbox(key="admin_ticket_pick").set_value("REQ-003")
+        at.selectbox(key="admin_ticket_pick").set_value(target["ticket_id"])
         at.run()
         at.selectbox(key="admin_ticket_next").set_value(step)
         _button(at, "상태 변경").click()
         at.run()
         assert not at.exception
         assert any("신청 상태를 변경했습니다" in m.value for m in at.success)
-    assert next(t for t in storage.get_tickets("bridgesoft") if t["ticket_id"] == "REQ-003")["status"] == "승인"
+    assert next(t for t in storage.get_tickets("bridgesoft") if t["ticket_id"] == target["ticket_id"])["status"] == "승인"
     _button(at, "로그아웃").click()
     at.run()
 
     employee = _login(at, code, "EMP001", _password("bridgesoft", "EMP001"))
     page = _all_markdown(employee)
-    assert "마우스" in page and "지급 예정" in page
+    assert target["item"] in page and "지급 예정" in page
 
 
 @pytest.mark.reimport

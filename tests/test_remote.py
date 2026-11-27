@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
+from tests import datafiles as D
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,12 +85,12 @@ async def test_identity_comes_from_token(server):
         for t in tools:
             schema = getattr(t, "input_schema", None) or t.inputSchema
             assert not {"company_id", "employee_id"} & set(schema.get("properties", {}))
-        assert call(await c.call_tool("get_employee_info", {}))["data"]["name"] == "김신입"
+        assert call(await c.call_tool("get_employee_info", {}))["data"]["name"] == D.employee("bridgesoft", "EMP001")["name"]
         assert call(await c.call_tool("get_employee_info", {"target": "EMP002"}))["code"] == "PERMISSION_DENIED"
         r = call(await c.call_tool("search_policy", {"query": "점심 식대 한도"}))
         assert "12,000원" in r["data"]["results"][0]["content"]
     async with Client(server + "/mcp", auth=BearerAuth("tokB")) as c:
-        assert call(await c.call_tool("get_employee_info", {}))["data"]["name"] == "이하준"
+        assert call(await c.call_tool("get_employee_info", {}))["data"]["name"] == D.employee("nextwave", "EMP001")["name"]
 
 
 async def test_two_step_ticket(server):

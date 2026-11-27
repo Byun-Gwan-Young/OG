@@ -18,6 +18,7 @@ from sqlalchemy import func, inspect, select, update
 import mcp_server as s
 import storage
 from scripts import import_company
+from tests import datafiles as D
 
 ROOT = Path(__file__).resolve().parents[1]
 A, B = "bridgesoft", "nextwave"
@@ -58,10 +59,10 @@ def _edit_json(path: Path, change) -> None:
 
 def test_row_counts_per_company():
     for company_id in (A, B):
-        assert _count(storage.employees, company_id) == 40
-        assert _count(storage.policies, company_id) == 120
-        assert _count(storage.tickets, company_id) == 3  # seed 상태
-        assert _company_row(company_id)["next_ticket_sequence"] == 4
+        assert _count(storage.employees, company_id) == D.count(company_id, "employees")
+        assert _count(storage.policies, company_id) == D.count(company_id, "policies")
+        assert _count(storage.tickets, company_id) == D.baseline_ticket_count(company_id)  # seed 상태
+        assert _company_row(company_id)["next_ticket_sequence"] == D.baseline_next_sequence(company_id)
 
 
 def test_employees_store_no_password():
@@ -117,7 +118,11 @@ def test_tool_envelope_and_expected_values():
 
 @pytest.mark.pg
 @pytest.mark.reimport
-def test_reimport_keeps_ticket_state_and_number(capsys):
+def test_reimport_keeps_ticket_state_and_number(capsys, monkeypatch):
+    # --all 경로를 쓰되 기준 상태 회사만 가져온다(data/에 회사가 늘어도 느려지지 않게)
+    monkeypatch.setattr(import_company, "_company_directories",
+                        lambda: [ROOT / "data" / A, ROOT / "data" / B])
+    seq = D.baseline_next_sequence(A)
     created = s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)["data"]["ticket"]
     storage.update_ticket_status(A, created["ticket_id"], "승인")
     before_version = _company_row(A)["data_version"]
@@ -128,24 +133,27 @@ def test_reimport_keeps_ticket_state_and_number(capsys):
 
     row = _company_row(A)
     assert row["data_version"] == before_version + 1
-    assert row["next_ticket_sequence"] == 5
+    assert row["next_ticket_sequence"] == seq + 1
     tickets = {t["ticket_id"]: t for t in storage.get_tickets(A)}
-    assert len(tickets) == 4 and tickets["REQ-004"]["status"] == "승인"
-    assert s.ui_confirm_ticket(A, "EMP001", "Slack", 1, request_type="계정")["data"]["ticket"]["ticket_id"] == "REQ-005"
+    assert len(tickets) == D.baseline_ticket_count(A) + 1
+    assert tickets[created["ticket_id"]]["status"] == "승인"
+    assert s.ui_confirm_ticket(A, "EMP001", "Slack", 1, request_type="계정")["data"]["ticket"]["ticket_id"] == f"REQ-{seq + 1:03d}"
 
 
 @pytest.mark.pg
 @pytest.mark.reimport
 def test_reset_tickets_numbering():
+    seq = D.baseline_next_sequence(A)
     for item in ("Slack", "Notion"):
-        s.ui_confirm_ticket(A, "EMP001", item, 1, request_type="계정")  # REQ-004, REQ-005
+        s.ui_confirm_ticket(A, "EMP001", item, 1, request_type="계정")  # seq, seq + 1
     assert import_company.main([str(ROOT / "data" / A), "--reset-tickets", "--yes"]) == 0
-    # seed(3건, next_sequence=4)로 교체하되 번호는 max(seed 4, 기존 최대 5 + 1) = 6
-    assert [t["ticket_id"] for t in storage.get_tickets(A)] == ["REQ-001", "REQ-002", "REQ-003"]
-    assert _company_row(A)["next_ticket_sequence"] == 6
-    assert s.ui_confirm_ticket(A, "EMP001", "Jira", 1, request_type="계정")["data"]["ticket"]["ticket_id"] == "REQ-006"
+    # seed로 교체하되 번호는 max(seed 다음 번호, 기존 최대 seq + 1 + 1) = seq + 2
+    seed_ids = sorted(t["ticket_id"] for t in D.baseline_tickets_doc(A)["tickets"])
+    assert sorted(t["ticket_id"] for t in storage.get_tickets(A)) == seed_ids
+    assert _company_row(A)["next_ticket_sequence"] == seq + 2
+    assert s.ui_confirm_ticket(A, "EMP001", "Jira", 1, request_type="계정")["data"]["ticket"]["ticket_id"] == f"REQ-{seq + 2:03d}"
     # 다른 회사 티켓은 영향 없음
-    assert _count(storage.tickets, B) == 3
+    assert _count(storage.tickets, B) == D.baseline_ticket_count(B)
 
 
 @pytest.mark.pg
@@ -153,9 +161,44 @@ def test_reset_tickets_numbering():
 def test_tickets_initialized_from_json_only_when_empty():
     storage.recreate_tables_for_tests()
     import_company.import_company_directory(ROOT / "data" / A)
-    # DB에 티켓이 없으면 data/의 tickets.json(5건, next_sequence=6)을 그대로 넣는다
-    assert _count(storage.tickets, A) == 5
-    assert _company_row(A)["next_ticket_sequence"] == 6
+    # DB에 티켓이 없으면 data/의 tickets.json을 그대로 넣는다(seed가 아니라 data/ 기준)
+    source = D.data_doc(A, "tickets")
+    assert _count(storage.tickets, A) == len(source["tickets"])
+    assert _company_row(A)["next_ticket_sequence"] == D.next_sequence(source)
+
+
+@pytest.mark.reimport
+def test_reset_tickets_falls_back_to_data_when_seed_missing(tmp_path, monkeypatch, capsys):
+    """seed/<회사>/tickets.json이 없으면 data/<회사>/tickets.json 기준으로 초기화하고 알린다."""
+    monkeypatch.setattr(import_company, "SEED_ROOT", tmp_path / "no_seed")
+    s.ui_confirm_ticket(A, "EMP001", "Slack", 1, request_type="계정")
+    assert import_company.main([str(ROOT / "data" / A), "--reset-tickets", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert f"data/{A}/tickets.json을 기준으로 티켓을 초기화했습니다" in out
+    source = D.data_doc(A, "tickets")
+    assert sorted(t["ticket_id"] for t in storage.get_tickets(A)) == sorted(
+        t["ticket_id"] for t in source["tickets"])
+
+
+def test_resolve_reset_tickets_none_when_seed_and_data_missing(tmp_path):
+    empty = tmp_path / A
+    empty.mkdir()
+    assert import_company.resolve_reset_tickets(A, empty, seed_root=tmp_path / "no_seed") == (None, None)
+
+
+@pytest.mark.reimport
+def test_reset_tickets_skips_only_company_without_ticket_source(monkeypatch, capsys):
+    monkeypatch.setattr(import_company, "_company_directories",
+                        lambda: [ROOT / "data" / A, ROOT / "data" / B])
+    real = import_company.resolve_reset_tickets
+    monkeypatch.setattr(import_company, "resolve_reset_tickets",
+                        lambda cid, d, *a, **k: (None, None) if cid == B else real(cid, d, *a, **k))
+    version_b = _company_row(B)["data_version"]
+    assert import_company.main(["--all", "--reset-tickets", "--yes"]) == 0
+    captured = capsys.readouterr()
+    assert f"건너뜀: {B}" in captured.err
+    assert f"가져오기 완료: {A}" in captured.out and f"가져오기 완료: {B}" not in captured.out
+    assert _company_row(B)["data_version"] == version_b
 
 
 @pytest.mark.reimport
@@ -164,10 +207,10 @@ def test_policy_removed_from_json_is_removed_from_db(tmp_path):
     _edit_json(company / "policies.json",
                lambda d: d.__setitem__("policies", [p for p in d["policies"] if p["id"] != "BS-118"]))
     import_company.import_company_directory(company)
-    assert _count(storage.policies, A) == 119
+    assert _count(storage.policies, A) == D.count(A, "policies") - 1
     ids = {p["id"] for p in storage.get_company_document(A, "policies")["policies"]}
     assert "BS-118" not in ids and "BS-103" in ids
-    assert _count(storage.policies, B) == 120
+    assert _count(storage.policies, B) == D.count(B, "policies")
 
 
 @pytest.mark.pg
@@ -252,7 +295,7 @@ def test_cache_refreshes_only_when_data_version_changes():
 def test_tickets_are_never_cached():
     storage.get_company_document(A, "tickets")
     s.ui_confirm_ticket(A, "EMP001", "Slack", 1, request_type="계정")
-    assert storage.get_company_document(A, "tickets")["next_sequence"] == 5
+    assert storage.get_company_document(A, "tickets")["next_sequence"] == D.baseline_next_sequence(A) + 1
     assert len(storage.get_tickets(A, "EMP001")) == len(
         [t for t in storage.get_company_document(A, "tickets")["tickets"] if t["employee_id"] == "EMP001"]
     )
@@ -279,7 +322,7 @@ def test_concurrent_ticket_creation_has_unique_numbers():
     assert all(r["code"] == "CREATED" for r in results), results
     ids = [r["data"]["ticket"]["ticket_id"] for r in results]
     assert len(set(ids)) == 10
-    assert _company_row(A)["next_ticket_sequence"] == 14
+    assert _company_row(A)["next_ticket_sequence"] == D.baseline_next_sequence(A) + 10
 
 
 @pytest.mark.pg
@@ -289,7 +332,7 @@ def test_duplicate_within_ten_seconds_is_ignored():
     assert first["code"] == "CREATED"
     assert second["code"] == "DUPLICATE_IGNORED"
     assert second["data"]["ticket"]["ticket_id"] == first["data"]["ticket"]["ticket_id"]
-    assert _count(storage.tickets, A) == 4
+    assert _count(storage.tickets, A) == D.baseline_ticket_count(A) + 1
 
 
 # ---- 로그·보안 --------------------------------------------------------------------

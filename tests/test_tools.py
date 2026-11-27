@@ -8,6 +8,7 @@ import pytest
 
 import mcp_server as s
 import storage
+from tests import datafiles as D
 
 DENY = s.MSG["DENIED_OR_NOT_FOUND"]
 pytestmark = pytest.mark.usefixtures("fresh_db")
@@ -32,7 +33,7 @@ def test_normal1_meal_limit():
 
 def test_normal1_remaining_leave():
     r = s.get_employee_info(A, "EMP001")
-    assert r["ok"] and r["data"]["name"] == "김신입"
+    assert r["ok"] and r["data"]["name"] == D.employee(A, "EMP001")["name"]
     assert r["data"]["annual_leave"]["remaining_days"] == 11
 
 
@@ -94,7 +95,7 @@ def test_ticket_created_req004_and_sidebar_updates():
     assert r["data"]["ticket"]["status"] == "접수완료"
     side = s.ui_get_sidebar(A, "EMP001")
     assert side["data"]["tickets"][0]["ticket_id"] == "REQ-004"
-    assert tickets_doc(A)["next_sequence"] == 5
+    assert tickets_doc(A)["next_sequence"] == D.baseline_next_sequence(A) + 1
 
 
 def test_dual_monitor_alias_creates_monitor_ticket():
@@ -106,7 +107,7 @@ def test_rapid_duplicate_submission_ignored():
     s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)
     r = s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)
     assert r["code"] in {"DUPLICATE_IGNORED", "REJECTED"}
-    assert len(tickets_doc(A)["tickets"]) == 4
+    assert len(tickets_doc(A)["tickets"]) == D.baseline_ticket_count(A) + 1
 
 
 # ---- 예외 상황 1: 미등록 정보 / 권한 초과 ----------------------------------
@@ -171,7 +172,7 @@ def test_company_b_uses_its_own_rules():
     r = s.search_policy("점심 식대 한도", B, "EMP001")
     assert r["data"]["results"][0]["policy_id"] == "NW-103"
     assert "15,000원" in r["data"]["results"][0]["content"]
-    assert s.get_employee_info(B, "EMP001")["data"]["name"] == "이하준"
+    assert s.get_employee_info(B, "EMP001")["data"]["name"] == D.employee(B, "EMP001")["name"]
     # B사는 모니터 한도 1대
     assert s.create_support_ticket("모니터", B, "EMP001", quantity=2)["code"] == "REJECTED"
     # B사 EMP001은 무선 키보드 검토중 → 키보드 추가는 거절

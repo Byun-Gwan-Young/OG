@@ -6,6 +6,7 @@ DB 주소는 storage.py가 .env의 DATABASE_URL에서 읽는다(없으면 로컬
     python scripts/import_company.py --all                  # 모든 회사
     python scripts/import_company.py data/bridgesoft        # 한 회사
     python scripts/import_company.py --all --reset-tickets  # 티켓을 seed로 초기화
+        # (seed/<회사>/tickets.json이 없으면 data/<회사>/tickets.json 기준)
     python scripts/import_company.py --all --reset-employee-passwords
         # 시연용: 사원 계정 비밀번호를 employees.json 값으로 되돌림(ADMIN 제외)
 """
@@ -86,19 +87,48 @@ def load_company_directory(
     return company_id, validate_documents(company_id, documents)
 
 
-def load_seed_tickets(
-    company_id: str, seed_root: str | Path = SEED_ROOT
-) -> dict[str, Any]:
-    seed_path = Path(seed_root) / company_id / "tickets.json"
-    document = _read_json(seed_path)
+def _load_tickets_file(company_id: str, path: Path) -> dict[str, Any]:
+    document = _read_json(path)
     if document.get("company_id") != company_id:
         raise ImportValidationError(
-            f"{seed_path.name}: company_id가 대상 회사 {company_id!r}과 일치하지 않습니다."
+            f"{path.name}: company_id가 대상 회사 {company_id!r}과 일치하지 않습니다."
         )
     for issue in company_data.validate_document("tickets", document, mode="import"):
         if issue["field"] in ("tickets",) or "tickets 항목" in issue["message"]:
-            raise ImportValidationError(issue["message"].replace("tickets.json", seed_path.name, 1))
+            raise ImportValidationError(issue["message"].replace("tickets.json", path.name, 1))
     return document
+
+
+def load_seed_tickets(
+    company_id: str, seed_root: str | Path = SEED_ROOT
+) -> dict[str, Any]:
+    return _load_tickets_file(company_id, Path(seed_root) / company_id / "tickets.json")
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def resolve_reset_tickets(
+    company_id: str,
+    company_dir: str | Path,
+    seed_root: str | Path | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """--reset-tickets 기준 티켓 문서와 출처 경로.
+
+    seed/<회사>/tickets.json이 있으면 그것을, 없으면 가져오는 회사 폴더(data/<회사>)의
+    tickets.json을 쓴다. 둘 다 없으면 (None, None).
+    """
+    seed_path = Path(seed_root if seed_root is not None else SEED_ROOT) / company_id / "tickets.json"
+    if seed_path.is_file():
+        return _load_tickets_file(company_id, seed_path), _display_path(seed_path)
+    data_path = Path(company_dir) / "tickets.json"
+    if data_path.is_file():
+        return _load_tickets_file(company_id, data_path), _display_path(data_path)
+    return None, None
 
 
 def import_company_directory(
@@ -108,7 +138,13 @@ def import_company_directory(
     seed_root: str | Path = SEED_ROOT,
 ) -> dict[str, Any]:
     company_id, documents = load_company_directory(company_dir)
-    seed_document = load_seed_tickets(company_id, seed_root) if reset_tickets else None
+    seed_document = None
+    if reset_tickets:
+        seed_document, _source = resolve_reset_tickets(company_id, company_dir, seed_root)
+        if seed_document is None:
+            raise ImportValidationError(
+                f"{company_id}: 초기화 기준 tickets.json(seed/ 또는 data/)이 없습니다."
+            )
     return storage.import_company_documents(
         company_id,
         documents,
@@ -118,18 +154,21 @@ def import_company_directory(
 
 
 def _company_directories() -> list[Path]:
+    """data/ 아래 회사 폴더. JSON 5종이 다 없는 폴더는 이유를 알리고 건너뛴다."""
     if not DATA_ROOT.is_dir():
         return []
-    return sorted(
-        path
-        for path in DATA_ROOT.iterdir()
-        if path.is_dir()
-        and all((path / f"{name}.json").is_file() for name in JSON_NAMES)
-    )
+    result = []
+    for path in sorted(p for p in DATA_ROOT.iterdir() if p.is_dir()):
+        missing = [f"{name}.json" for name in JSON_NAMES if not (path / f"{name}.json").is_file()]
+        if missing:
+            print(f"건너뜀: {path.name} ({', '.join(missing)} 없음)", file=sys.stderr)
+            continue
+        result.append(path)
+    return result
 
 
 def _confirm_cloud_import(
-    companies: list[tuple[str, dict[str, dict]]],
+    companies: list[tuple],
     reset: bool,
     yes: bool,
     reset_passwords: bool = False,
@@ -137,7 +176,7 @@ def _confirm_cloud_import(
     if storage.database_is_sqlite() or yes:
         return True
     host = storage.database_host()
-    company_labels = ", ".join(company_id for company_id, _ in companies)
+    company_labels = ", ".join(entry[0] for entry in companies)
     operation = (
         "회사 데이터 전체 교체 + seed 티켓 초기화"
         if reset
@@ -176,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         "--all", action="store_true", help="data/ 아래 모든 회사 가져오기"
     )
     parser.add_argument(
-        "--reset-tickets", action="store_true", help="각 회사 티켓을 seed 상태로 초기화"
+        "--reset-tickets", action="store_true", help="각 회사 티켓을 seed 상태로 초기화 (seed가 없으면 data/<회사>/tickets.json 기준)"
     )
     parser.add_argument(
         "--reset-employee-passwords",
@@ -201,18 +240,26 @@ def main(argv: list[str] | None = None) -> int:
                 raise ImportValidationError(
                     "data/ 아래에 가져올 회사 JSON 폴더가 없습니다."
                 )
-            prepared = []
-            for directory in directories:
-                company_id, documents = load_company_directory(directory)
-                # Validate every seed before any company starts importing.
-                if args.reset_tickets:
-                    load_seed_tickets(company_id)
-                prepared.append((company_id, documents))
         else:
-            company_id, documents = load_company_directory(args.company_dir)
+            directories = [Path(args.company_dir)]
+
+        # 모든 회사를 검증한 뒤에 가져오기를 시작한다.
+        prepared = []
+        for directory in directories:
+            company_id, documents = load_company_directory(directory)
+            seed_document, seed_source = None, None
             if args.reset_tickets:
-                load_seed_tickets(company_id)
-            prepared = [(company_id, documents)]
+                seed_document, seed_source = resolve_reset_tickets(company_id, directory)
+                if seed_document is None:
+                    print(
+                        f"건너뜀: {company_id} (seed/{company_id}/tickets.json과 "
+                        f"{_display_path(Path(directory))}/tickets.json이 모두 없습니다)",
+                        file=sys.stderr,
+                    )
+                    continue
+            prepared.append((company_id, documents, seed_document, seed_source))
+        if not prepared:
+            raise ImportValidationError("가져올 회사가 없습니다.")
 
         if not _confirm_cloud_import(
             prepared, args.reset_tickets, args.yes, args.reset_employee_passwords
@@ -221,10 +268,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         storage.init_db()
-        for company_id, documents in prepared:
-            seed_document = (
-                load_seed_tickets(company_id) if args.reset_tickets else None
-            )
+        for company_id, documents, seed_document, seed_source in prepared:
             result = storage.import_company_documents(
                 company_id,
                 documents,
@@ -236,6 +280,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"(data_version={result['data_version']}, 티켓 {result['ticket_count']}건)"
             )
             print(f"  {result['company_name']} / 회사 코드 {result['company_code']}")
+            seed_path = _display_path(SEED_ROOT / company_id / "tickets.json")
+            if seed_source and seed_source != seed_path:
+                print(f"  {seed_path}이 없어 {seed_source}을 기준으로 티켓을 초기화했습니다.")
             _print_initial_passwords(result.get("initial_passwords") or [])
             if result["ticket_action"] == "preserved":
                 print("티켓은 기존 DB 상태 유지(초기화하려면 --reset-tickets)")

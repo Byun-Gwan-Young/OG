@@ -15,6 +15,7 @@ import agent as agent_module
 import mcp_server as s
 import storage
 from scripts import import_company, list_companies, set_admin_password
+from tests import datafiles as D
 
 ROOT = Path(__file__).resolve().parents[1]
 A, B = "bridgesoft", "nextwave"
@@ -117,7 +118,7 @@ def test_login_employee_success_ignores_code_case_and_spaces():
     assert r["ok"], r
     data = r["data"]
     assert data["company_id"] == A and data["role"] == "employee"
-    assert data["employee_id"] == "EMP001" and data["name"] == "김신입"
+    assert data["employee_id"] == "EMP001" and data["name"] == D.employee(A, "EMP001")["name"]
     assert data["department"] == "백엔드개발팀"
     assert data["must_change"] is False
     assert set(data) == {

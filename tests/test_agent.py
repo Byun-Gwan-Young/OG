@@ -8,6 +8,7 @@ import pytest
 from google.genai import types
 
 from agent import ChatSession, OfficeGenieAgent, _YES, _NO
+from tests import datafiles as D
 
 
 
@@ -97,7 +98,7 @@ def test_ticket_requires_confirmation_then_created(make_agent):
     chat = agent.new_session("bridgesoft", "EMP001")
     r = chat.send("노트북 거치대 1개 신청해 줘")
     assert r["pending_ticket"]["item"] == "노트북 거치대" and not r["tickets_changed"]
-    assert len(agent.get_sidebar("bridgesoft", "EMP001")["data"]["tickets"]) == 3
+    assert len(agent.get_sidebar("bridgesoft", "EMP001")["data"]["tickets"]) == D.baseline_ticket_count("bridgesoft", "EMP001")
 
     r = chat.confirm_ticket()
     assert r["code"] == "CREATED" and r["ticket"]["ticket_id"] == "REQ-004" and r["tickets_changed"]
