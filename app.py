@@ -1844,7 +1844,8 @@ def _render_styles() -> None:
 
 def _render_shell_styles() -> None:
     """메뉴형 화면 공통 스타일. 팀 디자인 토큰(_render_styles의 :root)을 그대로 쓴다."""
-    st.markdown(
+    # st.html에 <style>만 넣으면 화면 자리를 차지하지 않는다(헤더 위 빈 줄 방지).
+    st.html(
         r"""
         <style>
         :root {
@@ -2243,9 +2244,78 @@ def _render_shell_styles() -> None:
                 width: 44px !important; min-width: 44px !important; height: 44px !important; min-height: 44px !important;
             }
         }
+
+        /* ==== 화면 점검 후 다듬기 ==== */
+        /* 헤더: 사용자 이름과 로그아웃 버튼 세로 정렬 */
+        .st-key-header_user [data-testid="stMarkdownContainer"] p { margin: 0 !important; line-height: 36px; }
+        .st-key-header_user [data-testid="stElementContainer"] { display: flex; align-items: center; }
+        /* Streamlit은 마크다운 마지막 문단에 음수 아래 여백을 준다 → 작은 글씨 문단이 버튼과 겹치지 않게 */
+        [data-testid="stMarkdownContainer"] :is(p.widget-note, p.list-count, p.widget-label, p.resource-desc, p.dashboard-help) {
+            margin-bottom: 0 !important;
+        }
+        [data-testid="stMarkdownContainer"] p.widget-note { font-size: 13px; line-height: 1.5; }
+        [data-testid="stMarkdownContainer"] p.list-count { font-size: 13px; }
+        [data-testid="stMarkdownContainer"] p.widget-label { font-size: 12px; }
+        [data-testid="stMarkdownContainer"] p.resource-desc { font-size: 13px; line-height: 1.5; margin: 0; }
+        [data-testid="stMarkdownContainer"] p.dashboard-help { font-size: 13px; }
+        .st-key-equipment_confirm_card p.widget-note { margin: 12px 0 10px !important; }
+        .manager-subtitle { font-size: 14px !important; }
+        .notice-page-entry .notice-body { font-size: 15px; }
+        .my-ticket .resource-meta { display: block; line-height: 1.5; }
+        .new-badge.private { background: #EEF2F6; color: var(--muted); }
+        /* 고정 탭바에 가려지지 않게: 포커스·스크롤 이동 시 아래 여유 */
+        html, [data-testid="stMain"], [data-testid="stAppViewContainer"] {
+            scroll-padding-bottom: calc(var(--tabbar-height) + 24px + var(--safe-bottom));
+        }
+        /* 관리자 표: 좁은 화면에서도 한 줄 유지, 가로 스크롤 */
+        .st-key-manager_table [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; }
+        .st-key-manager_table [data-testid="stColumn"] { min-width: 0 !important; width: auto !important; }
+        .st-key-preview_banner { scroll-margin-top: 100px; }
+
+        /* 모바일 하단 탭: 아이콘 위, 글자 아래 */
+        .st-key-bottom_tabs button > div,
+        .st-key-bottom_tabs button [data-testid="stMarkdownContainer"] { min-width: 0; }
+        .st-key-bottom_tabs button span[data-has-shortcut] { display: flex !important; flex-direction: column !important; align-items: center; gap: 2px; }
+        .st-key-bottom_tabs button p { overflow: hidden; text-overflow: clip; }
+
+        @media (max-width: 767.98px) {
+            /* 자료 행: 버튼을 아이콘 아래가 아닌 글자 줄에 맞춘다 */
+            [class*="st-key-lib_"][class*="_row_"] > div:nth-child(n+3),
+            [class*="st-key-admin_res_row_"] > div:nth-child(3) { margin-left: 56px !important; }
+            /* 챗봇 시트: 대화 영역이 남은 높이를 채우고 입력창은 맨 아래 */
+            .st-key-chat_panel > * { flex: 0 0 auto !important; }
+            .st-key-chat_panel > :has(.st-key-chat_scroll) {
+                flex: 1 1 auto !important; min-height: 0 !important; display: flex !important; flex-direction: column !important;
+            }
+            .st-key-chat_panel > :has(.st-key-chat_scroll) > * { flex: 1 1 auto !important; min-height: 0 !important; }
+            .st-key-chat_scroll { max-height: none !important; }
+            .st-key-chat_footer { flex: 0 0 auto !important; padding-bottom: calc(20px + var(--safe-bottom)) !important; }
+            .st-key-chat_panel { padding-bottom: 0 !important; }
+        }
+
+        /* 관리자는 메뉴가 6개라 1180px 미만에서는 하단 탭바를 쓴다(태블릿 헤더 넘침 방지) */
+        @media (max-width: 1179.98px) {
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-top_nav { display: none !important; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs {
+                display: flex !important; position: fixed !important; z-index: 10000;
+                left: 0; right: 0; bottom: 0; margin: 0 !important;
+                padding: 4px 4px calc(4px + var(--safe-bottom)) !important;
+                background: var(--card); border-top: 1px solid var(--line);
+                box-shadow: 0 -4px 16px rgba(32, 45, 64, 0.06); gap: 0 !important;
+            }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs > div { flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs button {
+                width: 100%; min-height: 56px !important; padding: 4px 2px !important;
+                border: 0 !important; border-radius: 12px !important; background: transparent !important; color: var(--muted) !important;
+            }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs button p { font-size: 12px; font-weight: 600; white-space: nowrap; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs button[data-testid="stBaseButton-primary"] { color: var(--blue) !important; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-page_main {
+                padding-bottom: calc(var(--tabbar-height) + 48px + var(--safe-bottom)) !important;
+            }
+        }
         </style>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
@@ -2444,7 +2514,7 @@ def _render_site_header(*, logout: bool = False, auth: dict | None = None, page:
                 vertical_alignment="center", gap="small",
             ):
                 if auth:
-                    who = "관리자" if is_admin else f"{auth.get('name') or ''}님"
+                    who = (auth.get("company_name") or "") if is_admin else f"{auth.get('name') or ''}님"
                     st.markdown(
                         f"<span class='header-user'>{_escape(who)}</span>",
                         unsafe_allow_html=True, width="content",
@@ -2457,7 +2527,7 @@ def _render_bottom_tabs(auth: dict, page: str) -> None:
     with st.container(key="bottom_tabs", horizontal=True, wrap=False, gap=None):
         for key, label, short, icon in _nav_for(auth):
             st.button(
-                short, key=f"tab_{key}", icon=icon, help=label,
+                short, key=f"tab_{key}", icon=icon,
                 type="primary" if key == page else "tertiary",
                 on_click=_go_page, args=(key,), width="stretch",
             )
@@ -4161,7 +4231,7 @@ def _my_ticket_html(ticket: dict) -> str:
         f"{_equipment_icon(str(ticket['item']))}"
         f"<span class='resource-text'><strong>{_escape(ticket['item'])} × {_escape(ticket['quantity'])}</strong>"
         f"<span class='resource-meta'>{_escape(ticket['ticket_id'])} · {_escape(ticket['type'])} · "
-        f"신청 {_escape(_date_label(ticket['created_at']))} · {extra}</span></span>"
+        f"신청 {_escape(_date_label(ticket['created_at']))}</span><span class='resource-meta'>{extra}</span></span>"
         f"<span class='status-badge status-{tone}'><i></i>{_escape(label)}</span></summary>"
         f"<div class='my-ticket-body'>{purpose}{_ticket_timeline_html(ticket)}</div></details>"
     )
@@ -4186,7 +4256,7 @@ def _page_employee_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
             if tickets is None:
                 _read_error(mine.get("message"), "my_tickets")
             elif not tickets:
-                st.markdown(_empty_html("아직 신청한 내역이 없습니다.", "왼쪽에서 필요한 비품을 신청해 보세요."), unsafe_allow_html=True)
+                st.markdown(_empty_html("아직 신청한 내역이 없습니다.", "비품을 신청하면 여기에서 처리 상황을 볼 수 있습니다."), unsafe_allow_html=True)
             else:
                 st.markdown(
                     "<p class='widget-note'>항목을 누르면 처리 이력을 볼 수 있습니다.</p>"
@@ -4316,7 +4386,11 @@ def _notice_widget_body(notices: list[dict]) -> str:
     rows = "".join(
         "<li class='notice-row'>"
         f"<span class='notice-title'>{_escape(n.get('title'))}"
-        + ("<em class='new-badge'>NEW</em>" if _is_new(n.get("published_at") or n.get("created_at")) else "")
+        + (
+            "<em class='new-badge private'>비공개</em>" if n.get("is_public") is False
+            else "<em class='new-badge'>NEW</em>" if _is_new(n.get("published_at") or n.get("created_at"))
+            else ""
+        )
         + f"</span><time class='notice-date'>{_date_label(n.get('published_at') or n.get('created_at'))}</time></li>"
         for n in notices
     )
@@ -4391,6 +4465,7 @@ def _open_preview() -> None:
     picked = st.session_state.get("preview_pick")
     if picked:
         st.session_state.preview_employee_id = picked
+        st.session_state.scroll_to_top = True
 
 
 def _render_admin_preview(agent: OfficeGenieAgent, auth: dict, employee_id: str) -> None:
@@ -4403,6 +4478,12 @@ def _render_admin_preview(agent: OfficeGenieAgent, auth: dict, employee_id: str)
             label = "직원 화면 미리보기"
         st.markdown(f"<span class='preview-label'>{_escape(label)}</span>", unsafe_allow_html=True, width="content")
         st.button("미리보기 닫기", key="preview_close", on_click=_close_preview)
+    if st.session_state.pop("scroll_to_top", False):
+        # 미리보기를 열면 맨 위(미리보기 띠)부터 보이게 한다.
+        st.html(
+            "<script>document.querySelector('.st-key-preview_banner')?.scrollIntoView({block: 'start'});</script>",
+            unsafe_allow_javascript=True,
+        )
     if not result.get("ok"):
         st.error(result.get("message") or CONNECTION_ERROR)
         return
