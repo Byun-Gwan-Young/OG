@@ -2019,6 +2019,8 @@ def _render_shell_styles() -> None:
         h2.company-name { margin: 4px 0 0; padding: 0 !important; color: var(--title); font-size: 24px; font-weight: 750; letter-spacing: -0.6px; }
         .st-key-admin_company_card .st-key-home_company_code { margin-top: 18px; }
         .st-key-home_widget_preview [data-testid="stSelectbox"] { margin-top: 12px; }
+        .st-key-home_widget_mcp { margin-top: 20px; min-height: 0; gap: 10px !important; }
+        .st-key-mcp_issue_row [data-testid="stTextInput"] { flex: 1 1 220px; }
         .st-key-preview_open button { min-height: 44px; }
         .st-key-preview_banner {
             position: sticky; top: 80px; z-index: 5;
@@ -3531,6 +3533,55 @@ def _admin_accounts_tab(agent: OfficeGenieAgent, auth: dict) -> None:
                 _apply_cookie_action()
 
 
+def _admin_mcp_revoke(agent: OfficeGenieAgent, auth: dict) -> None:
+    token_id = st.session_state.get("admin_mcp_pick")
+    if not token_id:
+        return
+    result = _admin(agent, auth, "ui_admin_revoke_mcp_token", token_id=token_id)
+    st.session_state.admin_mcp_result = (bool(result.get("ok")), result.get("message") or CONNECTION_ERROR)
+
+
+def _admin_mcp_tokens_tab(agent: OfficeGenieAgent, auth: dict) -> None:
+    """사원별 AI 앱 연결 토큰 현황과 강제 폐기. 원문은 관리자도 볼 수 없다."""
+    outcome = st.session_state.pop("admin_mcp_result", None)
+    if outcome:
+        (st.success if outcome[0] else st.error)(outcome[1])
+    data = _admin_read(agent, auth, "ui_admin_list_mcp_tokens")
+    if data is None:
+        return
+    tokens = data["tokens"]
+    active = [t for t in tokens if t["active"]]
+    st.markdown("#### 사원별 AI 앱 연결 토큰")
+    st.caption(
+        f"사원이 홈의 'AI 앱 연결' 카드에서 직접 발급합니다(1인 최대 {data['limit']}개). "
+        "토큰 원문은 저장하지 않으므로 관리자도 볼 수 없습니다."
+    )
+    if not tokens:
+        st.info("발급된 토큰이 없습니다.")
+        return
+    st.dataframe(
+        [
+            {
+                "사번": t["employee_id"],
+                "이름": t["name"],
+                "부서": t["department"],
+                "토큰 이름": t["label"],
+                "발급일": _short_time(t["issued_at"]),
+                "마지막 사용": _short_time(t["last_used_at"]) if t["last_used_at"] else "-",
+                "상태": "활성" if t["active"] else f"폐기 {_short_time(t['revoked_at'])}",
+            }
+            for t in tokens
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+    if active:
+        labels = {t["token_id"]: f"{t['employee_id']} {t['name']} · {t['label']}" for t in active}
+        st.selectbox("폐기할 토큰", list(labels), format_func=labels.get, key="admin_mcp_pick")
+        st.button("강제 폐기", key="admin_mcp_revoke_button", on_click=_admin_mcp_revoke, args=(agent, auth))
+        st.caption("폐기하면 그 토큰을 쓰던 AI 앱은 바로 연결이 끊기고, 감사 로그에 남습니다.")
+
+
 def _manager_select(section: str, mode: str | None, row_id: str | None = None) -> None:
     st.session_state[f"manager_{section}_selection"] = (mode, row_id)
 
@@ -4448,10 +4499,134 @@ def _page_employee_home(agent: OfficeGenieAgent, auth: dict) -> None:
         _read_error(result.get("message"), "employee_home")
         return
     _render_employee_home(result["data"])
+    _mcp_connect_card(agent, auth)
     st.markdown(
         "<p class='dashboard-help'>궁금한 점이 있나요? 오른쪽 아래 지니에게 물어보세요.</p>",
         unsafe_allow_html=True,
     )
+
+
+# ---- AI 앱 연결(원격 MCP 개인 토큰) ----------------------------------------------
+# 토큰 원문은 발급 응답에서만 한 번 받는다. 화면에서 '확인했어요'를 누르거나 로그아웃하면 지운다.
+
+MCP_TOKEN_PLACEHOLDER = "발급받은_토큰"
+
+
+def _mcp_connect_snippets(url: str, token: str) -> tuple[str, str]:
+    claude_code = (
+        f"claude mcp add --transport http officegenie {url} \\\n"
+        f'  --header "Authorization: Bearer {token}"'
+    )
+    cursor = json.dumps(
+        {"mcpServers": {"officegenie": {"url": url, "headers": {"Authorization": f"Bearer {token}"}}}},
+        ensure_ascii=False, indent=2,
+    )
+    return claude_code, cursor
+
+
+def _mcp_connect_guide(url: str, token: str) -> None:
+    if not url:
+        st.info("서비스 운영자가 아직 AI 앱 연결 주소를 설정하지 않았습니다. 주소가 설정되면 여기에 연결 방법이 표시됩니다.")
+        return
+    claude_code, cursor = _mcp_connect_snippets(url, token)
+    st.caption(f"MCP 주소: {url}")
+    tab_claude, tab_cursor = st.tabs(["Claude Code", "Cursor · 기타(JSON)"])
+    with tab_claude:
+        st.code(claude_code, language="bash")
+    with tab_cursor:
+        st.code(cursor, language="json")
+
+
+def _mcp_issue(agent: OfficeGenieAgent, auth: dict) -> None:
+    label = str(st.session_state.get("mcp_token_label") or "").strip()
+    result = agent.employee_call("ui_issue_mcp_token", auth["company_id"], auth["employee_id"], label=label)
+    if result.get("ok"):
+        st.session_state.mcp_new_token = {
+            "token": result["data"]["token"],
+            "label": result["data"]["issued"]["label"],
+            "mcp_url": result["data"].get("mcp_url") or "",
+        }
+        st.session_state.mcp_token_label = ""
+    st.session_state.mcp_token_result = (bool(result.get("ok")), result.get("message") or CONNECTION_ERROR)
+
+
+def _mcp_revoke(agent: OfficeGenieAgent, auth: dict, token_id: str) -> None:
+    result = agent.employee_call(
+        "ui_revoke_my_mcp_token", auth["company_id"], auth["employee_id"], token_id=token_id
+    )
+    st.session_state.mcp_token_result = (bool(result.get("ok")), result.get("message") or CONNECTION_ERROR)
+
+
+def _mcp_dismiss_new_token() -> None:
+    st.session_state.pop("mcp_new_token", None)
+
+
+def _mcp_connect_card_preview() -> None:
+    """관리자 미리보기: 토큰 발급·폐기 버튼 없이 안내만 보여 준다."""
+    with st.container(key="home_widget_mcp", gap=None):
+        st.markdown(
+            "<div class='widget-head'><h3>AI 앱 연결</h3></div>"
+            "<p class='widget-note'>사원이 자기 AI 앱(Claude Code, Cursor 등)에 오피스지니를 연결하는 개인 토큰을 "
+            "발급·폐기하는 카드입니다. 미리보기에서는 토큰을 발급하거나 폐기할 수 없습니다.</p>",
+            unsafe_allow_html=True,
+        )
+
+
+def _mcp_connect_card(agent: OfficeGenieAgent, auth: dict) -> None:
+    with st.container(key="home_widget_mcp", gap=None):
+        st.markdown(
+            "<div class='widget-head'><h3>AI 앱 연결</h3></div>"
+            "<p class='widget-note'>쓰고 있는 AI 앱(Claude Code, Cursor 등)에서 오피스지니에 바로 물어볼 수 있습니다. "
+            "토큰은 내 신원과 같으니 다른 사람과 공유하지 마세요.</p>",
+            unsafe_allow_html=True,
+        )
+        outcome = st.session_state.pop("mcp_token_result", None)
+        if outcome:
+            (st.success if outcome[0] else st.error)(outcome[1])
+        fresh = st.session_state.get("mcp_new_token")
+        if fresh:
+            with st.container(key="mcp_new_token_box", border=True):
+                st.markdown(f"**새 토큰 · {_escape(fresh['label'])}**")
+                st.warning("이 토큰은 지금 한 번만 보입니다. 복사 버튼으로 복사해 안전한 곳에 붙여 두세요.")
+                st.code(fresh["token"], language=None)
+                _mcp_connect_guide(fresh["mcp_url"], fresh["token"])
+                st.button("확인했어요", key="mcp_new_token_done", on_click=_mcp_dismiss_new_token)
+        result = agent.employee_call("ui_list_my_mcp_tokens", auth["company_id"], auth["employee_id"])
+        if result.get("code") == "INVALID_SESSION":
+            _logout(result.get("message", ""))
+            st.rerun()
+        if not result.get("ok"):
+            st.error(result.get("message") or CONNECTION_ERROR)
+            return
+        data = result["data"]
+        tokens, limit = data["tokens"], data["limit"]
+        st.markdown(f"**내 토큰** <span class='card-count'>{len(tokens)} / {limit}</span>", unsafe_allow_html=True)
+        if not tokens:
+            st.caption("발급한 토큰이 없습니다.")
+        for t in tokens:
+            with st.container(key=f"mcp_token_{t['token_id']}", horizontal=True,
+                              horizontal_alignment="distribute", vertical_alignment="center"):
+                used = _date_label(t["last_used_at"]) if t["last_used_at"] else "사용 기록 없음"
+                st.markdown(
+                    f"<div class='equipment-name'>{_escape(t['label'])}"
+                    f"<small class='equipment-date'>발급 {_date_label(t['issued_at'])} · 마지막 사용 {used}</small></div>",
+                    unsafe_allow_html=True, width="content",
+                )
+                with st.popover("폐기", width="content"):
+                    st.write("이 토큰을 폐기할까요? 이 토큰을 쓰던 AI 앱은 바로 연결이 끊깁니다.")
+                    st.button("폐기하기", key=f"mcp_revoke_{t['token_id']}", type="primary",
+                              on_click=_mcp_revoke, args=(agent, auth, t["token_id"]))
+        full = len(tokens) >= limit
+        with st.container(key="mcp_issue_row", horizontal=True, vertical_alignment="bottom"):
+            st.text_input("토큰 이름", key="mcp_token_label", max_chars=40,
+                          placeholder="예: 회사 노트북 Claude Code", disabled=full)
+            st.button("새 토큰 발급", key="mcp_issue_button", type="primary", disabled=full,
+                      on_click=_mcp_issue, args=(agent, auth))
+        if full:
+            st.caption(f"토큰은 한 사람당 최대 {limit}개입니다. 쓰지 않는 토큰을 폐기하면 새로 발급할 수 있습니다.")
+        if not fresh:
+            with st.expander("연결 방법 보기"):
+                _mcp_connect_guide(data.get("mcp_url") or "", MCP_TOKEN_PLACEHOLDER)
 
 
 # ---- 관리자 홈 ----------------------------------------------------------------
@@ -4489,6 +4664,7 @@ def _render_admin_preview(agent: OfficeGenieAgent, auth: dict, employee_id: str)
         return
     st.caption("사원이 보는 홈 화면입니다. 미리보기에서는 신청·변경을 할 수 없습니다.")
     _render_employee_home(result["data"], interactive=False)
+    _mcp_connect_card_preview()
 
 
 def _page_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
@@ -4970,6 +5146,7 @@ def _page_admin_data(agent: OfficeGenieAgent, auth: dict) -> None:
         ("자료 업로드", "upload", upload),
         ("사내 규정", "policies", policies),
         ("계정", "accounts", lambda: _admin_accounts_tab(agent, auth)),
+        ("AI 앱 연결", "mcp_tokens", lambda: _admin_mcp_tokens_tab(agent, auth)),
     ])
 
 

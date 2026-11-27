@@ -84,6 +84,10 @@ MSG = {
     "PASSWORD_RESET": "초기 비밀번호를 새로 만들었습니다. 이 화면에서만 한 번 보입니다.",
     "ACCOUNT_UNLOCKED": "잠금을 해제했습니다.",
     "COMPANY_REGISTERED": "회사를 등록했습니다. 아래 회사 코드를 사원들에게 알려주세요.",
+    "MCP_TOKEN_ISSUED": "토큰을 발급했습니다. 이 화면을 벗어나면 다시 볼 수 없으니 지금 복사해 두세요.",
+    "MCP_TOKEN_LIMIT": "AI 앱 연결 토큰은 한 사람당 최대 3개입니다. 쓰지 않는 토큰을 폐기한 뒤 다시 발급해 주세요.",
+    "MCP_TOKEN_REVOKED": "토큰을 폐기했습니다. 이 토큰을 쓰던 AI 앱은 바로 연결이 끊깁니다.",
+    "MCP_TOKEN_NOT_FOUND": "해당 토큰을 찾을 수 없거나 이미 폐기되었습니다.",
 }
 
 mcp = FastMCP(
@@ -1316,6 +1320,110 @@ def ui_admin_unlock_account(
     ):
         return fail("NOT_FOUND", MSG["ACCOUNT_NOT_FOUND"])
     return ok("UNLOCKED", message=MSG["ACCOUNT_UNLOCKED"])
+
+
+# ---------------------------------------------------------------------------
+# AI 앱 연결(원격 MCP) 개인 토큰. 사원 본인·관리자 권한을 서버에서 다시 확인한다.
+# 토큰 원문은 발급 응답에서만 한 번 돌려주고, DB에는 해시만 저장한다.
+# ---------------------------------------------------------------------------
+
+
+def mcp_public_url() -> str:
+    """사원에게 안내할 원격 MCP 주소(OFFICEGENIE_MCP_PUBLIC_URL). 끝에 /mcp를 붙여 돌려준다."""
+    value = os.environ.get("OFFICEGENIE_MCP_PUBLIC_URL", "").strip().rstrip("/")
+    if not value.startswith(("https://", "http://")):
+        return ""
+    return value if value.endswith("/mcp") else value + "/mcp"
+
+
+def _require_employee_account(company_id: str, employee_id: str) -> dict | None:
+    """사원 본인 확인: 사원 데이터와 활성 사원 계정이 모두 있어야 한다(ADMIN 불가)."""
+    _, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    account = storage.get_account(str(company_id or ""), str(employee_id or ""))
+    if account is None or account["role"] != storage.ROLE_EMPLOYEE or account["disabled"]:
+        return fail("PERMISSION_DENIED", MSG["DENIED_OR_NOT_FOUND"])
+    return None
+
+
+def _my_tokens_payload(company_id: str, employee_id: str) -> dict:
+    return {
+        "tokens": storage.list_mcp_tokens(company_id, employee_id),
+        "limit": storage.MCP_TOKENS_PER_EMPLOYEE,
+        "mcp_url": mcp_public_url(),
+    }
+
+
+@mcp.tool
+@_storage_safe
+def ui_list_my_mcp_tokens(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 내 AI 앱 연결 토큰 목록(이름·발급일·마지막 사용일)과 MCP 주소. 원문은 없다."""
+    denied = _require_employee_account(company_id, employee_id)
+    if denied:
+        return denied
+    return ok(data=_my_tokens_payload(company_id, employee_id))
+
+
+@mcp.tool
+@_storage_safe
+def ui_issue_mcp_token(company_id: str, employee_id: str, label: str = "") -> dict:
+    """[UI 전용] 내 AI 앱 연결 토큰을 새로 발급한다. 원문(token)은 이 응답에서만 한 번 돌려준다."""
+    denied = _require_employee_account(company_id, employee_id)
+    if denied:
+        return denied
+    try:
+        token, info = storage.issue_mcp_token(company_id, employee_id, label)
+    except storage.TokenLimitReached:
+        return fail("TOKEN_LIMIT", MSG["MCP_TOKEN_LIMIT"], _my_tokens_payload(company_id, employee_id))
+    return ok(
+        "TOKEN_ISSUED",
+        data={**_my_tokens_payload(company_id, employee_id), "token": token, "issued": info},
+        message=MSG["MCP_TOKEN_ISSUED"],
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_revoke_my_mcp_token(company_id: str, employee_id: str, token_id: str) -> dict:
+    """[UI 전용] 내 토큰 하나를 폐기한다. 다른 사원의 토큰은 폐기할 수 없다."""
+    denied = _require_employee_account(company_id, employee_id)
+    if denied:
+        return denied
+    if not storage.revoke_mcp_token(
+        company_id, str(token_id or ""), employee_id=employee_id, actor=employee_id
+    ):
+        return fail("NOT_FOUND", MSG["MCP_TOKEN_NOT_FOUND"], _my_tokens_payload(company_id, employee_id))
+    return ok("TOKEN_REVOKED", data=_my_tokens_payload(company_id, employee_id),
+              message=MSG["MCP_TOKEN_REVOKED"])
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_mcp_tokens(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 사원별 AI 앱 연결 토큰 현황(활성 + 폐기 이력). 원문·해시는 없다."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    storage.record_admin_view(company_id, actor_account_id, "view_mcp_tokens")
+    names = {p["employee_id"]: p for p in storage.admin_list_employees(company_id)}
+    rows = []
+    for t in storage.list_mcp_tokens(company_id, include_revoked=True):
+        person = names.get(t["employee_id"]) or {}
+        rows.append({**t, "name": person.get("name") or "", "department": person.get("department") or ""})
+    return ok(data={"tokens": rows, "limit": storage.MCP_TOKENS_PER_EMPLOYEE})
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_revoke_mcp_token(company_id: str, actor_account_id: str, token_id: str) -> dict:
+    """[UI 전용·관리자] 같은 회사 사원의 토큰을 강제 폐기한다(감사 로그 기록)."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    if not storage.revoke_mcp_token(company_id, str(token_id or ""), actor=actor_account_id):
+        return fail("NOT_FOUND", MSG["MCP_TOKEN_NOT_FOUND"])
+    return ok("TOKEN_REVOKED", message=MSG["MCP_TOKEN_REVOKED"])
 
 
 @mcp.tool

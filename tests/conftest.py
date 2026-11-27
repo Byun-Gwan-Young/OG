@@ -37,6 +37,9 @@ os.environ.pop("DATABASE_URL", None)
 os.environ.pop("TEST_DATABASE_URL", None)
 os.environ.pop("OFFICEGENIE_TEST_SCHEMA", None)
 os.environ.pop("OFFICEGENIE_TEST_DATABASE_URL", None)
+os.environ.pop("OFFICEGENIE_ENV", None)
+# 화면의 'AI 앱 연결' 안내에 쓰는 주소. 하위 프로세스(MCP 서버)까지 같은 값을 보도록 고정한다.
+os.environ["OFFICEGENIE_MCP_PUBLIC_URL"] = "https://officegenie-mcp.example.test"
 
 import storage  # noqa: E402
 

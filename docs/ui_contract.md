@@ -124,6 +124,30 @@ agent.admin_call("ui_admin_preview_employee", company_id, account_id, employee_i
 - 미리보기 화면은 읽기 전용이다. 신청 폼·챗봇·더보기 버튼을 그리지 않고, 관리자 세션으로는
   `ui_confirm_ticket`이 INVALID_SESSION이라 티켓이 만들어지지 않는다.
 
+### 2-2-1-1. AI 앱 연결(원격 MCP 개인 토큰)
+
+```python
+agent.employee_call("ui_list_my_mcp_tokens", company_id, employee_id)
+# → data = {"tokens": [{token_id(해시 앞 12자), employee_id, label, issued_at, last_used_at|None,
+#            revoked_at: None, active: True}], "limit": 3,
+#           "mcp_url": "https://…/mcp" | ""}   # OFFICEGENIE_MCP_PUBLIC_URL, 없으면 빈 문자열
+agent.employee_call("ui_issue_mcp_token", company_id, employee_id, label="회사 노트북")
+# → {"ok": True, "code": "TOKEN_ISSUED", "message": "...지금 복사해 두세요.",
+#    "data": {위 목록 data + "token": "og_…"(원문, 이 응답에서만 한 번), "issued": {새 토큰 공개 정보}}}
+# 실패: TOKEN_LIMIT(활성 3개, data는 목록) · PERMISSION_DENIED/INVALID_SESSION(ADMIN·없는 사번·비활성 계정)
+agent.employee_call("ui_revoke_my_mcp_token", company_id, employee_id, token_id="…")
+# → TOKEN_REVOKED(data는 갱신된 목록) / NOT_FOUND(없음·이미 폐기·다른 사원 토큰)
+agent.admin_call("ui_admin_list_mcp_tokens", company_id, account_id)
+# → {"tokens": [위 공개 정보 + name, department, 폐기된 것 포함], "limit": 3}. 감사 로그 view_mcp_tokens.
+agent.admin_call("ui_admin_revoke_mcp_token", company_id, account_id, token_id="…")
+# → TOKEN_REVOKED / NOT_FOUND(다른 회사 토큰 포함). 감사 로그 mcp_token_revoke.
+```
+
+- 토큰 툴은 LLM_TOOLS에 없다. 사원 툴은 사원 데이터와 활성 사원 계정을, 관리자 툴은 accounts의 관리자 역할을 서버에서 다시 확인한다.
+- DB(`mcp_tokens`)에는 SHA-256 해시만 저장한다. 목록 응답에는 원문도 해시 전체도 없다.
+- 화면은 원문을 `st.session_state.mcp_new_token`에만 두고 '확인했어요' 또는 로그아웃 때 지운다.
+- 관리자 미리보기는 안내 문구만 그리고 발급·폐기 버튼을 그리지 않는다(ADMIN 세션은 서버에서도 거부).
+
 ### 2-2-2. 공지사항 메뉴
 
 ```python
