@@ -7,9 +7,12 @@ Streamlit은 페이지 <head>를 앱 코드에서 바꿀 수 없어서, 설치�
     python scripts/pwa_setup.py --check    # 적용 여부만 확인(적용됨 0, 아니면 1)
     python scripts/pwa_setup.py --undo     # 되돌리기
 
-- 복사: pwa/sw.js → static/sw.js(범위 "/"), pwa/manifest.webmanifest·offline.html·아이콘 → static/pwa/
+- 복사: pwa/sw.js → static/sw.js(범위 "/"), pwa/manifest.webmanifest·offline.html·install.js·아이콘 → static/pwa/
+  sw.js는 복사할 때 __OFFICEGENIE_BUILD__를 빌드 버전(PWA 파일 + streamlit 버전 해시)으로 바꾼다 → 캐시 이름이 바뀌어
+  새 버전이 설치되면 옛 캐시가 지워진다.
 - index.html: manifest 링크, theme-color, apple-mobile-web-app-* 메타, apple-touch-icon,
-  서비스 워커 등록 코드(표시 주석 사이), viewport-fit=cover(아이폰 하단 안전 영역)
+  서비스 워커 등록 코드, 앱 설치 안내 스크립트(pwa/install.js), 아이콘 폰트 미리 불러오기(preload),
+  viewport-fit=cover(아이폰 하단 안전 영역). 모두 표시 주석 사이에 넣는다.
 - streamlit 버전을 바꾸면(패키지를 다시 설치하면) static 폴더가 새로 깔리므로 다시 실행한다.
 - 서비스 워커는 HTTPS 또는 localhost에서만 동작한다.
 """
@@ -19,7 +22,6 @@ import argparse
 import hashlib
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -36,6 +38,7 @@ SUB_FILES = (
     "icon-512.png",
     "icon-maskable-512.png",
     "apple-touch-icon.png",
+    "install.js",
 )
 ROOT_FILES = ("sw.js",)
 # 블록은 줄 단위로 넣고 줄 단위로 지운다 → 몇 번을 실행해도, 되돌려도 원래 글자 그대로.
@@ -59,10 +62,46 @@ def _theme_color() -> str:
     return manifest["theme_color"]
 
 
-def head_block(*, viewport_added: bool = False) -> str:
+BUILD_PLACEHOLDER = "__OFFICEGENIE_BUILD__"
+
+
+def build_version() -> str:
+    """PWA 원본 파일 전부와 설치된 streamlit 버전으로 만든 빌드 버전(서비스 워커 캐시 이름에 쓴다)."""
+    import importlib.metadata
+
+    digest = hashlib.sha256()
+    for name in sorted((*ROOT_FILES, *SUB_FILES)):
+        digest.update(name.encode())
+        digest.update((PWA_DIR / name).read_bytes())
+    try:
+        digest.update(importlib.metadata.version("streamlit").encode())
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    return digest.hexdigest()[:12]
+
+
+def rendered(name: str) -> bytes:
+    """정적 폴더에 놓일 내용. sw.js만 빌드 버전을 채운다."""
+    data = (PWA_DIR / name).read_bytes()
+    if name == "sw.js":
+        data = data.replace(BUILD_PLACEHOLDER.encode(), build_version().encode())
+    return data
+
+
+def icon_font(static_dir: Path | None) -> str | None:
+    """Streamlit 아이콘 폰트(Material Symbols) 파일 이름. 없으면 None."""
+    if static_dir is None:
+        return None
+    found = sorted((static_dir / "static" / "media").glob("MaterialSymbols-Rounded*.woff2"))
+    return found[0].name if found else None
+
+
+def head_block(static_dir: Path | None = None, *, viewport_added: bool = False) -> str:
     """index.html <head>에 넣을 태그. 경로는 상대 경로(./)라 baseUrlPath에서도 동작한다."""
     manifest_v = _version(PWA_DIR / "manifest.webmanifest")
     icon_v = _version(PWA_DIR / "apple-touch-icon.png")
+    install_v = _version(PWA_DIR / "install.js")
+    font = icon_font(static_dir)
     lines = [
         START,
         f'<link rel="manifest" href="./pwa/manifest.webmanifest?v={manifest_v}" />',
@@ -72,6 +111,11 @@ def head_block(*, viewport_added: bool = False) -> str:
         '<meta name="apple-mobile-web-app-title" content="오피스지니" />',
         '<meta name="apple-mobile-web-app-status-bar-style" content="default" />',
         f'<link rel="apple-touch-icon" href="./pwa/apple-touch-icon.png?v={icon_v}" />',
+    ]
+    if font:
+        # 아이콘 폰트를 화면 코드보다 먼저 받기 시작해 아이콘 이름 글자가 보이는 시간을 없앤다.
+        lines.append(f'<link rel="preload" href="./static/media/{font}" as="font" type="font/woff2" crossorigin />')
+    lines += [
         "<script>",
         '  if ("serviceWorker" in navigator && window.isSecureContext) {',
         '    window.addEventListener("load", function () {',
@@ -81,6 +125,7 @@ def head_block(*, viewport_added: bool = False) -> str:
         "    });",
         "  }",
         "</script>",
+        f'<script src="./pwa/install.js?v={install_v}" defer></script>',
     ]
     if viewport_added:
         lines.append(VIEWPORT_MARK)
@@ -95,7 +140,7 @@ def _strip(html: str) -> tuple[str, bool]:
     return _BLOCK_RE.sub("", html), added
 
 
-def patched_index(html: str) -> str:
+def patched_index(html: str, static_dir: Path | None = None) -> str:
     """표시 주석 사이 블록을 새로 넣는다(있으면 교체). 몇 번을 실행해도 결과가 같다."""
     html, added = _strip(html)
     viewport = _VIEWPORT_RE.search(html)
@@ -104,7 +149,7 @@ def patched_index(html: str) -> str:
         added = True
     if not _HEAD_END_RE.search(html):
         raise ValueError("index.html에서 </head>를 찾지 못했습니다.")
-    block = head_block(viewport_added=added)
+    block = head_block(static_dir, viewport_added=added)
     return _HEAD_END_RE.sub(lambda m: block + m.group(0), html, count=1)
 
 
@@ -132,14 +177,14 @@ def check(static_dir: Path) -> list[str]:
     html = index.read_text("utf-8")
     if html.count(START) != 1 or html.count(END) != 1:
         problems.append("index.html에 PWA 태그가 없습니다.")
-    elif patched_index(html) != html:
+    elif patched_index(html, static_dir) != html:
         problems.append("index.html의 PWA 태그가 최신이 아닙니다.")
     if "viewport-fit=cover" not in html:
         problems.append("viewport-fit=cover가 없습니다.")
     for source, target in _targets(static_dir):
         if not target.is_file():
             problems.append(f"{target.relative_to(static_dir)} 파일이 없습니다.")
-        elif target.read_bytes() != source.read_bytes():
+        elif target.read_bytes() != rendered(source.name):
             problems.append(f"{target.relative_to(static_dir)} 파일이 최신이 아닙니다.")
     return problems
 
@@ -147,10 +192,10 @@ def check(static_dir: Path) -> list[str]:
 def apply(static_dir: Path) -> None:
     for source, target in _targets(static_dir):
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+        target.write_bytes(rendered(source.name))
     index = static_dir / "index.html"
     html = index.read_text("utf-8")
-    new_html = patched_index(html)
+    new_html = patched_index(html, static_dir)
     if new_html != html:
         index.write_text(new_html, "utf-8")
 

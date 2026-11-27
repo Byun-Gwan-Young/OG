@@ -148,3 +148,57 @@ def test_icon_script_regenerates_same_sizes(tmp_path):
         with Image.open(tmp_path / name) as image:
             assert image.size == (size, size)
     shutil.rmtree(tmp_path)
+
+
+def test_service_worker_cache_name_carries_build_version(static_dir):
+    source = (PWA / "sw.js").read_text("utf-8")
+    assert pwa_setup.BUILD_PLACEHOLDER in source
+    assert 'const CACHE = "officegenie-pwa-" + BUILD;' in source
+    assert 'key.startsWith("officegenie-") && key !== CACHE' in source  # activate에서 옛 캐시 삭제
+    assert pwa_setup.main(["--static-dir", str(static_dir)]) == 0
+    copied = (static_dir / "sw.js").read_text("utf-8")
+    version = pwa_setup.build_version()
+    assert re.fullmatch(r"[0-9a-f]{12}", version)
+    assert f'const BUILD = "{version}";' in copied and pwa_setup.BUILD_PLACEHOLDER not in copied
+    assert pwa_setup.check(static_dir) == []
+
+
+def test_build_version_changes_with_pwa_files(monkeypatch, tmp_path):
+    for name in (*pwa_setup.ROOT_FILES, *pwa_setup.SUB_FILES):
+        shutil.copyfile(PWA / name, tmp_path / name)
+    shutil.copyfile(PWA / "manifest.webmanifest", tmp_path / "manifest.webmanifest")
+    monkeypatch.setattr(pwa_setup, "PWA_DIR", tmp_path)
+    before = pwa_setup.build_version()
+    (tmp_path / "install.js").write_text("// changed", "utf-8")
+    assert pwa_setup.build_version() != before
+
+
+def test_install_script_and_icon_font_preload(static_dir):
+    media = static_dir / "static" / "media"
+    media.mkdir(parents=True)
+    (media / "MaterialSymbols-Rounded.abc123.woff2").write_bytes(b"font")
+    assert pwa_setup.main(["--static-dir", str(static_dir)]) == 0
+    head = (static_dir / "index.html").read_text("utf-8").split("</head>")[0]
+    assert '<script src="./pwa/install.js?v=' in head and " defer></script>" in head
+    assert ('<link rel="preload" href="./static/media/MaterialSymbols-Rounded.abc123.woff2" '
+            'as="font" type="font/woff2" crossorigin />') in head
+    assert (static_dir / "pwa" / "install.js").read_bytes() == (PWA / "install.js").read_bytes()
+    assert pwa_setup.main(["--check", "--static-dir", str(static_dir)]) == 0
+    assert pwa_setup.main(["--undo", "--static-dir", str(static_dir)]) == 0
+    assert "install.js" not in (static_dir / "index.html").read_text("utf-8")
+    assert not (static_dir / "pwa").exists()
+
+
+def test_install_script_contract():
+    js = (PWA / "install.js").read_text("utf-8")
+    for needle in ("beforeinstallprompt", "preventDefault", "appinstalled", "(display-mode: standalone)",
+                   "navigator.standalone", 'a[href="#og-install"]', "og-icon-font-missing"):
+        assert needle in js, needle
+    # 저장소 접근은 getFlag/setFlag(try/catch)로만 한다. 차단된 저장소는 브라우저 테스트에서 확인한다.
+    code = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    assert ".getItem(" in code and code.count(".getItem(") == 1 and code.count(".setItem(") == 1
+    assert "function getFlag" in js and "try {" in js.split("function getFlag")[1].split("}")[0]
+    # 저장하는 것은 '안내를 닫았다'는 표시뿐
+    assert re.findall(r'"officegenie:[a-z-]+"', js) == ['"officegenie:ios-install-hint-dismissed"',
+                                                       '"officegenie:install-pill-closed"',
+                                                       '"officegenie:install-pill-closed"']

@@ -2,12 +2,17 @@
  * 오피스지니 서비스 워커 (scripts/pwa_setup.py가 Streamlit 정적 폴더 맨 위에 sw.js로 복사한다)
  *
  * - 미리 저장하는 것은 아이콘과 offline.html뿐이다.
+ * - 캐시 이름에 빌드 버전을 넣는다. pwa_setup.py가 복사할 때 __OFFICEGENIE_BUILD__를 PWA 파일·streamlit 버전의
+ *   해시로 바꾼다. 버전이 바뀌면 새 서비스 워커가 설치되고 activate에서 옛 캐시를 모두 지운다.
  * - 페이지 이동(navigate)은 네트워크 우선, 실패하면 offline.html을 보여 준다. 페이지 응답은 저장하지 않는다.
- * - /_stcore/ 경로(웹소켓·상태 확인·업로드)와 그 밖의 응답은 건드리지 않는다.
+ * - HTML·JS·CSS·폰트 등 그 밖의 요청은 가로채지 않는다(항상 네트워크, 브라우저 기본 캐시 규칙).
+ *   옛 화면 파일이 서비스 워커에 남아 아이콘·화면이 깨지는 일을 막는다.
+ * - /_stcore/ 경로(웹소켓·상태 확인·업로드)는 절대 건드리지 않는다.
  *   화면 데이터에는 개인정보가 있고 실시간 연결이어서 저장하면 안 된다.
  * - 서비스 워커는 HTTPS 또는 localhost에서만 동작한다.
  */
-const CACHE = "officegenie-pwa-v1";
+const BUILD = "__OFFICEGENIE_BUILD__";
+const CACHE = "officegenie-pwa-" + BUILD;
 const OFFLINE_URL = new URL("pwa/offline.html", self.registration.scope).href;
 const PRECACHE = [
   OFFLINE_URL,
@@ -26,7 +31,9 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      // 이 버전이 아닌 오피스지니 캐시(옛 빌드)는 모두 지운다.
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith("officegenie-") && key !== CACHE)
+        .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });

@@ -91,7 +91,7 @@ def test_employee_notice_page_empty_state():
 def test_admin_creates_edits_and_toggles_inline():
     storage.set_admin_password(A, ADMIN_PW)
     at = _app("ADMIN", ADMIN_PW, "notices")
-    next(b for b in at.button if b.label == "＋ 공지 작성").click().run()
+    next(b for b in at.button if b.label == "공지 작성").click().run()
     at.text_input(key="manager_notice_title").input("새 공지")
     at.text_area(key="manager_notice_body").input("본문 한 줄")
     next(b for b in at.button if b.label == "저장").click().run()

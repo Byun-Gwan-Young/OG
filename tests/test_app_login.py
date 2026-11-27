@@ -347,7 +347,7 @@ def test_manager_adds_and_edits_employee_preserving_company_scope():
     _manager_tab(at, "사원 관리")
     original = storage.admin_list_employees("bridgesoft")
     other = storage.get_employee("nextwave", "EMP001")
-    _button(at, "＋ 사원 추가").click().run()
+    _button(at, "사원 추가").click().run()
     department = original[0]["department"]
     at.text_input(key="manager_employee_id").input("emp001")
     at.text_input(key="manager_employee_name").input("관리 화면 테스트")
@@ -393,7 +393,7 @@ def test_manager_equipment_date_and_announcement_visibility_in_employee_dashboar
     assert any("비품 신청 정보가 저장되었습니다" in item.value for item in at.success)
 
     _manager_tab(at, "공지사항 관리")
-    _button(at, "＋ 공지 작성").click().run()
+    _button(at, "공지 작성").click().run()
     at.text_input(key="manager_notice_title").input("사원 공개 공지")
     at.text_area(key="manager_notice_body").input("1. 첫 줄\n\n2. 둘째 줄")
     _button(at, "저장").click().run()
@@ -434,7 +434,7 @@ def test_manager_policy_search_detail_and_back_preserves_filters():
     at.button(key=f"manager_policies_row_{row['id']}").click().run()
     assert "조항 원문" in _all_markdown(at)
     assert "&#10;②" in _all_markdown(at)
-    _button(at, "← 규정 목록").click().run()
+    _button(at, "규정 목록").click().run()
     assert at.text_input(key="manager_policies_filters_query").value == row["title"]
     assert at.selectbox(key="manager_policies_filters_choice").value == row["category"]
     _button(at, "초기화").click().run()

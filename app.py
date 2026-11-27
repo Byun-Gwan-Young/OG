@@ -562,6 +562,7 @@ def _render_chat_panel(company_id: str, employee_id: str) -> None:
             st.button(
                 "닫기",
                 key="chat_close_button",
+                icon=":material/close:",
                 help="대화창 닫기",
                 on_click=_toggle_chat_panel,
                 args=(company_id, employee_id),
@@ -703,9 +704,51 @@ def _render_styles() -> None:
             color: var(--title);
             font-family: Inter, "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
         }
-        [data-testid="stHeader"], [data-testid="stToolbar"], #MainMenu, footer {
+        [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"],
+        [data-testid="stAppDeployButton"], [data-testid="stMainMenu"], #MainMenu, footer {
             display: none !important;
         }
+        /* 아이콘: 본문 글꼴 규칙이 아이콘 요소에 번지지 않게 Material 글꼴을 고정하고, 폭을 1글자로 묶는다.
+           글꼴을 못 받은 경우에도 아이콘 이름 글자(chevron_right 등)가 옆 글자와 겹치지 않는다. */
+        [data-testid="stIconMaterial"], .material-symbols-rounded {
+            font-family: "Material Symbols Rounded" !important;
+            font-style: normal !important;
+            font-weight: 400;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            white-space: nowrap !important;
+            word-break: normal !important;
+            direction: ltr;
+            font-feature-settings: "liga";
+            -webkit-font-feature-settings: "liga";
+            display: inline-block;
+            width: 1em;
+            max-width: 1em;
+            overflow: hidden;
+            flex-shrink: 0;
+            line-height: 1;
+        }
+        /* pwa/install.js가 아이콘 글꼴을 끝내 받지 못했다고 표시하면 이름 글자를 감춘다(자리만 유지). */
+        .og-icon-font-missing :is([data-testid="stIconMaterial"], .material-symbols-rounded) { color: transparent !important; }
+        /* 사용할 수 없는 기본(파란) 버튼: 글자가 배경에 묻히지 않게 회색으로 */
+        button[data-testid="stBaseButton-primary"]:disabled,
+        button[data-testid="stBaseButtonPrimary"]:disabled {
+            background: #E6EBF2 !important; border-color: #E6EBF2 !important; color: #66778F !important; opacity: 1 !important;
+        }
+        /* 입력 칸은 화면 어디서나 흰 바탕 + 같은 테두리 */
+        [data-testid="stTextInputRootElement"]:not(:has(input:disabled)),
+        [data-testid="stTextArea"] [data-baseweb="textarea"],
+        [data-testid="stNumberInputContainer"],
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div:not([aria-disabled="true"]) {
+            background: var(--card) !important;
+            border-color: #D5DFEF !important;
+        }
+        [data-testid="stTextInputRootElement"]:not(:has(input:disabled)) input,
+        [data-testid="stTextArea"] textarea,
+        [data-testid="stNumberInputContainer"] input { background: transparent !important; }
+        /* 표 행: 글자 칸과 버튼 칸의 세로 가운데를 맞춘다 */
+        [class*="st-key-manager_row_"] [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+        [class*="st-key-manager_row_"] [data-testid="stElementContainer"] { margin: 0 !important; }
         [data-testid="stMainBlockContainer"], .block-container {
             width: 100% !important;
             max-width: none !important;
@@ -1064,6 +1107,8 @@ def _render_styles() -> None:
             border-radius: 8px;
         }
         .st-key-manager_table { overflow-x: auto; }
+        .manager-scroll-hint { display: none; margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+        @media (max-width: 680px) { .manager-scroll-hint { display: block; } }
         .st-key-manager_table [class*="st-key-manager_row_"],
         .st-key-manager_table_head { min-width: 650px; padding: 0 12px; }
         .st-key-manager_table [class*="st-key-manager_row_"] {
@@ -1454,18 +1499,15 @@ def _render_styles() -> None:
             border: 0 !important;
             border-radius: 8px !important;
             background: transparent !important;
-            color: transparent !important;
-            font-size: 0 !important;
+            color: #71819A !important;
             box-shadow: none !important;
             cursor: pointer;
         }
-        .st-key-chat_close_button button::after {
-            color: #71819A;
-            content: "×";
-            font-size: 25px;
-            font-weight: 350;
-            line-height: 1;
+        /* 글자 "닫기"는 화면에서 숨기고(스크린리더용 이름은 남김) 아이콘만 보인다. */
+        .st-key-chat_close_button button [data-testid="stMarkdownContainer"] {
+            position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
         }
+        .st-key-chat_close_button button [data-testid="stIconMaterial"] { font-size: 22px; margin: 0 !important; }
         .st-key-chat_close_button button:hover { background: #F5F7FA !important; }
         .st-key-chat_close_button button:focus-visible { outline: 2px solid #3868BE !important; }
 
@@ -2019,7 +2061,33 @@ def _render_shell_styles() -> None:
         h2.company-name { margin: 4px 0 0; padding: 0 !important; color: var(--title); font-size: 24px; font-weight: 750; letter-spacing: -0.6px; }
         .st-key-admin_company_card .st-key-home_company_code { margin-top: 18px; }
         .st-key-home_widget_preview [data-testid="stSelectbox"] { margin-top: 12px; }
-        .st-key-home_widget_mcp { margin-top: 20px; min-height: 0; gap: 10px !important; }
+        .st-key-home_widget_mcp { margin-top: 4px; min-height: 0; gap: 10px !important; }
+        .st-key-home_widget_install { margin-top: 4px; min-height: 0 !important; padding: 18px 22px !important; }
+        .og-standalone .st-key-home_widget_install { display: none !important; }
+        .install-card {
+            display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 12px 16px;
+        }
+        .install-icon {
+            flex: 0 0 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+            background: #EAF1FC; color: var(--blue);
+        }
+        .install-text { flex: 1 1 auto; min-width: 0; }
+        .install-text h3 { margin: 0; padding: 0 !important; color: var(--title); font-size: 17px; font-weight: 700; }
+        .install-text .widget-note { margin-top: 2px; }
+        .install-note-ios { display: none; }
+        .og-ios .install-note-ios { display: block; }
+        .og-ios .install-note-default { display: none; }
+        a.install-cta, a.install-cta:visited {
+            flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+            min-height: 44px; padding: 0 18px; border-radius: 10px; background: var(--blue);
+            color: #fff !important; font-size: 14px; font-weight: 600; text-decoration: none !important;
+        }
+        a.install-cta:hover { background: #2F5BA8; }
+        a.install-cta:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+        @media (max-width: 520px) {
+            .install-card { grid-template-columns: 44px minmax(0, 1fr); }
+            a.install-cta { grid-column: 1 / -1; }
+        }
         .st-key-mcp_issue_row [data-testid="stTextInput"] { flex: 1 1 220px; }
         .st-key-preview_open button { min-height: 44px; }
         .st-key-preview_banner {
@@ -2711,7 +2779,8 @@ def _render_entry_form_header(
             unsafe_allow_html=True, width="content",
         )
         st.button(
-            "← 뒤로가기", key=back_key, on_click=on_back, args=back_args, disabled=disabled,
+            "뒤로가기", key=back_key, icon=":material/arrow_back:", on_click=on_back, args=back_args,
+            disabled=disabled,
         )
 
 
@@ -2841,7 +2910,7 @@ def _render_login() -> None:
     if future is not None:
         label = "확인 중…"
     elif success is not None:
-        label = "✓ 로그인 성공"
+        label = "로그인 성공"
 
     with _entry_form_body():
         with st.container(key="login_card", gap=None):
@@ -2871,6 +2940,7 @@ def _render_login() -> None:
                         st.warning(state.login_warning)
                 st.form_submit_button(
                     label, key="login_submit",
+                    icon=":material/check:" if success is not None else None,
                     type="primary", width="stretch", disabled=busy, on_click=_submit_login,
                 )
     if future is not None:
@@ -3653,6 +3723,8 @@ def _manager_table(
                 break
     start = (page - 1) * page_size
     visible = rows[start:start + page_size]
+    st.markdown("<p class='manager-scroll-hint'>표를 옆으로 밀면 나머지 칸과 관리 버튼이 보입니다.</p>",
+                unsafe_allow_html=True)
     with st.container(key="manager_table", gap=None):
         with st.container(key="manager_table_head", gap=None):
             for col, label in zip(st.columns(widths), (*labels, "관리")):
@@ -3815,7 +3887,7 @@ def _manager_employees(agent: OfficeGenieAgent, auth: dict) -> None:
 
     with st.container(horizontal=True, horizontal_alignment="distribute"):
         _manager_heading("사원 목록", "회사에 소속된 사원 정보를 확인하고 관리하세요.", f"총 {len(people)}명")
-        st.button("＋ 사원 추가", type="primary", on_click=_manager_select, args=("employees", "add"))
+        st.button("사원 추가", type="primary", icon=":material/add:", on_click=_manager_select, args=("employees", "add"))
     initial = st.session_state.pop("manager_employee_password", None)
     if initial:
         st.info(f"{initial['employee_id']} 사원의 초기 비밀번호는 {initial['initial_password']}입니다. 최초 로그인 시 변경해야 합니다.")
@@ -4027,14 +4099,14 @@ def _manager_notices(agent: OfficeGenieAgent, auth: dict) -> None:
         st.error(error)
     with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
         _manager_heading("공지사항 목록", "제목을 눌러 수정하거나 공개 상태를 바로 바꿀 수 있습니다.", f"총 {len(notices)}건")
-        st.button("＋ 공지 작성", type="primary", on_click=_manager_select, args=("notices", "add"))
+        st.button("공지 작성", type="primary", icon=":material/add:", on_click=_manager_select, args=("notices", "add"))
     if mode == "add":
         with st.container(key="notice_inline_form"):
             _manager_announcement_form(agent, auth, None)
     if not notices:
         st.markdown(
             "<div class='empty-state'><strong>등록된 공지사항이 없습니다.</strong>"
-            "<span>‘＋ 공지 작성’으로 첫 공지를 올려 보세요.</span></div>",
+            "<span>‘공지 작성’ 버튼으로 첫 공지를 올려 보세요.</span></div>",
             unsafe_allow_html=True,
         )
         return
@@ -4084,7 +4156,7 @@ def _manager_policies(agent: OfficeGenieAgent, auth: dict) -> None:
     policies = result["policies"]
     mode, policy_id = st.session_state.get("manager_policies_selection", (None, None))
     if mode == "detail":
-        st.button("← 규정 목록", type="tertiary", on_click=_manager_select, args=("policies", None))
+        st.button("규정 목록", type="tertiary", icon=":material/arrow_back:", on_click=_manager_select, args=("policies", None))
         policy = next((p for p in policies if p["id"] == policy_id), None)
         if not policy:
             st.info("해당 조항을 찾을 수 없습니다.")
@@ -4519,11 +4591,37 @@ def _page_employee_home(agent: OfficeGenieAgent, auth: dict) -> None:
         _read_error(result.get("message"), "employee_home")
         return
     _render_employee_home(result["data"])
+    _install_app_card()
     _mcp_connect_card(agent, auth)
     st.markdown(
         "<p class='dashboard-help'>궁금한 점이 있나요? 오른쪽 아래 지니에게 물어보세요.</p>",
         unsafe_allow_html=True,
     )
+
+
+# ---- 앱으로 설치하기(PWA) ---------------------------------------------------------
+# 설치 창은 최상위 문서의 pwa/install.js가 띄운다(href="#og-install" 클릭을 가로챔).
+# install.js가 <html>에 og-standalone(이미 앱으로 실행 중)·og-ios(iPhone/iPad)를 붙이면 CSS로 카드 내용을 바꾼다.
+
+_INSTALL_ICON = (
+    "<svg width='22' height='22' viewBox='0 0 24 24' aria-hidden='true' fill='none' stroke='currentColor' "
+    "stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='2.5' width='12' height='19' rx='2.5'/>"
+    "<path d='M12 7.5v6'/><path d='m9.5 11 2.5 2.5 2.5-2.5'/><path d='M10.5 18.5h3'/></svg>"
+)
+
+
+def _install_app_card() -> None:
+    with st.container(key="home_widget_install", gap=None):
+        st.markdown(
+            "<div class='install-card'>"
+            f"<span class='install-icon'>{_INSTALL_ICON}</span>"
+            "<div class='install-text'><h3>앱으로 설치하기</h3>"
+            "<p class='widget-note install-note-default'>홈 화면에 추가하면 주소창 없이 앱처럼 바로 열 수 있어요.</p>"
+            "<p class='widget-note install-note-ios'>Safari 아래쪽 공유 버튼을 누르고 ‘홈 화면에 추가’를 고르세요.</p></div>"
+            "<a class='install-cta' href='#og-install' role='button'>설치하기</a>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ---- AI 앱 연결(원격 MCP 개인 토큰) ----------------------------------------------
@@ -4626,7 +4724,7 @@ def _mcp_connect_card(agent: OfficeGenieAgent, auth: dict) -> None:
         for t in tokens:
             with st.container(key=f"mcp_token_{t['token_id']}", horizontal=True,
                               horizontal_alignment="distribute", vertical_alignment="center"):
-                used = _date_label(t["last_used_at"]) if t["last_used_at"] else "사용 기록 없음"
+                used = _date_label(t["last_used_at"]) if t["last_used_at"] else "없음"
                 st.markdown(
                     f"<div class='equipment-name'>{_escape(t['label'])}"
                     f"<small class='equipment-date'>발급 {_date_label(t['issued_at'])} · 마지막 사용 {used}</small></div>",
@@ -5082,11 +5180,11 @@ def _page_admin_library(agent: OfficeGenieAgent, auth: dict) -> None:
             st.error(error)
         with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
             _manager_heading("자료 목록", f"형식: {data['allowed_types']} · 파일당 {RESOURCE_MAX_MB}MB 이하", f"총 {len(resources)}건")
-            st.button("＋ 자료 등록", key="resource_new", type="primary", on_click=_resource_form_open, args=(None,))
+            st.button("자료 등록", key="resource_new", type="primary", icon=":material/add:", on_click=_resource_form_open, args=(None,))
         if st.session_state.get("resource_editing"):
             _render_resource_form(agent, auth, data)
         if not resources:
-            st.markdown(_empty_html("등록된 자료가 없습니다.", "‘＋ 자료 등록’으로 양식이나 안내 자료를 올려 보세요."), unsafe_allow_html=True)
+            st.markdown(_empty_html("등록된 자료가 없습니다.", "‘자료 등록’ 버튼으로 양식이나 안내 자료를 올려 보세요."), unsafe_allow_html=True)
             return
         query = _manager_term(st.text_input("자료 검색", key="admin_library_query", placeholder="제목·설명 검색", label_visibility="collapsed", icon=":material/search:"))
         rows = [r for r in resources if _resource_matches(r, query)]
