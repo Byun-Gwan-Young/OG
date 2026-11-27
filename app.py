@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import io
 import json
@@ -1895,6 +1896,131 @@ def _render_shell_styles() -> None:
         .st-key-page_main [data-testid="stTabs"] [role="tab"][aria-selected="true"] { color: var(--blue); font-weight: 700; }
         .st-key-page_main [data-testid="stTabs"] [role="tabpanel"] { padding-top: 18px; }
 
+        /* ---- 홈: 사원증 + 위젯 ---- */
+        .st-key-home_layout {
+            display: grid !important;
+            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+            align-items: start;
+            gap: 24px;
+        }
+        .st-key-home_id_column { position: sticky; top: 104px; }
+        .id-card {
+            overflow: hidden;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-card);
+            box-shadow: var(--shadow-card);
+        }
+        .id-card-top {
+            display: flex; justify-content: space-between; align-items: center; gap: 12px;
+            min-height: 56px; padding: 14px 22px;
+            background: var(--blue); color: #fff;
+        }
+        .id-company { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; min-width: 0; }
+        .id-kind { flex: 0 0 auto; font-size: 12px; font-weight: 600; opacity: .85; letter-spacing: .08em; }
+        .id-card-body { display: flex; flex-direction: column; align-items: center; padding: 28px 24px 22px; text-align: center; }
+        .id-avatar {
+            width: 104px; height: 104px; display: grid; place-items: center;
+            border-radius: 50%; background: var(--blue-soft); color: var(--blue);
+            font-size: 42px; font-weight: 750; letter-spacing: -1px;
+            border: 4px solid var(--card); box-shadow: 0 0 0 1px var(--input-line);
+        }
+        h2.id-name {
+            margin: 18px 0 0; padding: 0 !important; color: var(--title);
+            font-size: 28px; font-weight: 750; letter-spacing: -0.8px; line-height: 1.3;
+        }
+        .id-meta { margin: 6px 0 0; color: var(--body); font-size: 15px; font-weight: 600; }
+        .id-job { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+        .id-number {
+            display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px;
+            margin-top: 18px; padding: 10px 14px; width: 100%; box-sizing: border-box;
+            border-radius: var(--radius-control); background: var(--page);
+        }
+        .id-number span { color: var(--muted); font-size: 13px; }
+        .id-number strong { color: var(--title); font-size: 16px; letter-spacing: .06em; }
+        .id-badge {
+            display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px;
+            border-radius: var(--radius-pill); background: var(--amber-bg); color: var(--amber) !important;
+            font-size: 12px !important; font-weight: 700; letter-spacing: 0 !important;
+        }
+        .id-code { width: 100%; margin-top: 18px; color: var(--title); }
+        .id-barcode { display: block; width: 100%; height: 40px; opacity: .82; }
+        .id-code small { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+
+        .st-key-home_widgets {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+            gap: 20px;
+        }
+        [class*="st-key-home_widget_"], .st-key-admin_company_card {
+            box-sizing: border-box;
+            min-height: 220px;
+            padding: 22px 22px 14px;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 17px;
+            box-shadow: var(--shadow-soft);
+            gap: 0 !important;
+        }
+        [class*="st-key-home_widget_"] [data-testid="stMarkdownContainer"] { margin-bottom: 0; }
+        .widget-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+        .widget-head h3 { margin: 0; padding: 0 !important; color: var(--title); font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+        .widget-note { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+        .widget-label { margin: 14px 0 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+        .status-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .status-chips .status-badge { margin-left: 0; min-height: 28px; }
+        .equipment-list.compact { margin-top: 4px; border-top: 0; }
+        .equipment-list.compact .equipment-row { min-height: 56px; }
+        ul.widget-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid #E7ECF3; }
+        ul.widget-list .notice-row { min-height: 52px; font-size: 14px; }
+        .notice-title { min-width: 0; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .new-badge {
+            display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px;
+            border-radius: var(--radius-pill); background: var(--blue); color: #fff;
+            font-size: 10px; font-style: normal; font-weight: 750; letter-spacing: .04em;
+        }
+        ul.task-list { list-style: none; margin: 10px 0 0; padding: 0; }
+        ul.task-list li { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; color: var(--body); font-size: 14px; line-height: 1.5; }
+        .task-box { flex: 0 0 16px; width: 16px; height: 16px; margin-top: 3px; border: 1.5px solid #B8C6DB; border-radius: 5px; background: var(--card); }
+        [class*="st-key-home_more_"] { margin-top: auto !important; align-self: flex-end; }
+        [class*="st-key-home_more_"] button { min-height: 44px; padding: 0 6px !important; color: var(--blue) !important; }
+        [class*="st-key-home_more_"] button p { font-size: 14px; font-weight: 600; }
+        .dashboard-help { margin: 0; color: #71819A; font-size: 13px; }
+
+        /* ---- 관리자 홈 ---- */
+        .st-key-admin_home_layout {
+            display: grid !important;
+            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+            align-items: start; gap: 24px;
+        }
+        .st-key-admin_company_card { min-height: 0; padding: 24px; border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+        h2.company-name { margin: 4px 0 0; padding: 0 !important; color: var(--title); font-size: 24px; font-weight: 750; letter-spacing: -0.6px; }
+        .st-key-admin_company_card .st-key-home_company_code { margin-top: 18px; }
+        .st-key-home_widget_preview [data-testid="stSelectbox"] { margin-top: 12px; }
+        .st-key-preview_open button { min-height: 44px; }
+        .st-key-preview_banner {
+            position: sticky; top: 80px; z-index: 5;
+            padding: 10px 16px; border-radius: var(--radius-control);
+            background: var(--amber-bg); border: 1px solid #EED9AE;
+        }
+        .preview-label { color: var(--amber); font-size: 14px; font-weight: 700; }
+        .st-key-preview_close button { min-height: 40px; background: var(--card); border-color: #EED9AE; color: var(--amber); }
+
+        @media (max-width: 1023.98px) {
+            .st-key-home_widgets { grid-template-columns: minmax(0, 1fr); }
+        }
+        @media (max-width: 767.98px) {
+            .st-key-home_layout, .st-key-admin_home_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            .st-key-home_id_column { position: static; }
+            .id-card-body { padding: 22px 20px 18px; }
+            .id-avatar { width: 88px; height: 88px; font-size: 36px; }
+            h2.id-name { font-size: 25px; }
+            .st-key-home_widgets { gap: 14px; }
+            [class*="st-key-home_widget_"] { min-height: 0; padding: 18px 18px 8px; }
+            .st-key-preview_banner { top: 60px; }
+        }
+
         /* ---- 모바일 하단 탭바: PC에서는 숨긴다 ---- */
         .st-key-bottom_tabs { display: none !important; }
 
@@ -3639,26 +3765,6 @@ def _employee_sidebar(agent: OfficeGenieAgent, auth: dict) -> dict | None:
     return result.get("data") or {}
 
 
-def _page_employee_home(agent: OfficeGenieAgent, auth: dict) -> None:
-    data = _employee_sidebar(agent, auth)
-    fallback_employee = {
-        "employee_id": auth["employee_id"],
-        "name": auth.get("name"),
-        "department": auth.get("department"),
-        "position": auth.get("position"),
-    }
-    data_ok = data is not None
-    data = data or {}
-    annual_leave = data.get("annual_leave")
-    remaining_leave = annual_leave.get("remaining_days") if isinstance(annual_leave, dict) else None
-    _render_dashboard(
-        data.get("employee", fallback_employee),
-        data.get("tickets", []) if data_ok else None,
-        remaining_leave,
-        data.get("announcements"),
-    )
-
-
 def _page_employee_notices(agent: OfficeGenieAgent, auth: dict) -> None:
     _page_heading("공지사항", "회사 소식을 확인하세요.")
     data = _employee_sidebar(agent, auth)
@@ -3679,6 +3785,279 @@ def _page_employee_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 홈: 사원증 + 요약 위젯
+# ---------------------------------------------------------------------------
+
+NEW_BADGE_DAYS = 7
+STATUS_ORDER = ("접수완료", "검토중", "승인", "지급완료", "반려")
+
+
+def _parse_time(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+
+
+def _is_new(value: object) -> bool:
+    moment = _parse_time(value)
+    if moment is None:
+        return False
+    age = datetime.now(ZoneInfo("Asia/Seoul")) - moment
+    return age.total_seconds() >= -60 and age.days < NEW_BADGE_DAYS
+
+
+def _date_label(value: object) -> str:
+    moment = _parse_time(value)
+    return moment.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y.%m.%d") if moment else "—"
+
+
+def _barcode_svg(seed: str) -> str:
+    """사번으로 만든 장식용 바코드(실제 인증 수단 아님)."""
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    x, bars = 0, []
+    for byte in digest[:24]:
+        for width in (1 + (byte & 3), 1 + ((byte >> 2) & 1)):
+            bars.append(f"<rect x='{x}' y='0' width='{width}' height='36'/>")
+            x += width + 1 + ((byte >> 4) & 1)
+    return (
+        f"<svg class='id-barcode' viewBox='0 0 {x} 36' preserveAspectRatio='none' "
+        f"aria-hidden='true' fill='currentColor'>{''.join(bars)}</svg>"
+    )
+
+
+def _id_card_html(company_name: str, employee: dict) -> str:
+    name = str(employee.get("name") or "")
+    initial = name[:1] or "?"
+    meta = " · ".join(
+        _escape(part) for part in (employee.get("department"), employee.get("position")) if part
+    )
+    job = employee.get("job_title")
+    week = employee.get("onboarding_week")
+    badge = f"<span class='id-badge'>입사 {int(week)}주차</span>" if week else ""
+    return (
+        "<section class='id-card' aria-label='사원증'>"
+        f"<header class='id-card-top'><span class='id-company'>{_escape(company_name)}</span>"
+        "<span class='id-kind'>사원증</span></header>"
+        "<div class='id-card-body'>"
+        f"<div class='id-avatar' aria-hidden='true'>{_escape(initial)}</div>"
+        f"<h2 class='id-name'>{_escape(name)}</h2>"
+        f"<p class='id-meta'>{meta}</p>"
+        + (f"<p class='id-job'>{_escape(job)}</p>" if job else "")
+        + f"<div class='id-number'><span>사번</span><strong>{_escape(employee.get('employee_id'))}</strong>{badge}</div>"
+        f"<div class='id-code'>{_barcode_svg(str(employee.get('employee_id') or ''))}"
+        "<small>장식용 표시 · 출입·인증에 쓰지 않습니다</small></div>"
+        "</div></section>"
+    )
+
+
+def _widget(key: str, title: str, body: str, *, more: str | None = None, count: str = "", interactive: bool = True) -> None:
+    with st.container(key=f"home_widget_{key}", gap=None):
+        count_html = f"<span class='card-count'>{_escape(count)}</span>" if count else ""
+        st.markdown(
+            f"<div class='widget-head'><h3>{_escape(title)}</h3>{count_html}</div>{body}",
+            unsafe_allow_html=True,
+        )
+        if more and interactive:
+            st.button(
+                "더보기", key=f"home_more_{key}", type="tertiary", icon=":material/chevron_right:",
+                icon_position="right", on_click=_go_page, args=(more,),
+            )
+
+
+def _leave_widget_body(leave: dict) -> str:
+    details = []
+    for label, key in (("부여", "granted_days"), ("사용", "used_days")):
+        if leave.get(key) is not None:
+            details.append(f"{label} {_escape(leave[key])}일")
+    if leave.get("as_of"):
+        details.append(f"기준일 {_escape(leave['as_of'])}")
+    detail = f"<p class='widget-note'>{' · '.join(details)}</p>" if details else ""
+    return _remaining_leave_value(leave.get("remaining_days")) + detail
+
+
+def _ticket_widget_body(counts: dict, latest: dict | None) -> str:
+    if not latest:
+        return "<div class='dashboard-empty'>아직 신청한 비품이 없습니다.</div>"
+    chips = "".join(
+        f"<span class='status-badge status-{_equipment_status(status)[1]}'>"
+        f"{_escape(_equipment_status(status)[0])} {counts[status]}</span>"
+        for status in STATUS_ORDER
+        if counts.get(status)
+    )
+    return (
+        f"<div class='status-chips'>{chips}</div>"
+        "<p class='widget-label'>최근 신청</p>"
+        f"<div class='equipment-list compact'>{_equipment_row(latest)}</div>"
+    )
+
+
+def _notice_widget_body(notices: list[dict]) -> str:
+    if not notices:
+        return "<div class='dashboard-empty'>등록된 공지사항이 없습니다.</div>"
+    rows = "".join(
+        "<li class='notice-row'>"
+        f"<span class='notice-title'>{_escape(n.get('title'))}"
+        + ("<em class='new-badge'>NEW</em>" if _is_new(n.get("published_at") or n.get("created_at")) else "")
+        + f"</span><time class='notice-date'>{_date_label(n.get('published_at') or n.get('created_at'))}</time></li>"
+        for n in notices
+    )
+    return f"<ul class='notice-list widget-list'>{rows}</ul>"
+
+
+def _tasks_widget_body(first_week: dict) -> str:
+    tasks = first_week.get("tasks") or []
+    if not tasks:
+        return "<div class='dashboard-empty'>소속 부서의 1주 차 할 일이 아직 등록되지 않았습니다.</div>"
+    items = "".join(
+        "<li><span class='task-box' aria-hidden='true'></span>"
+        f"<span>{_escape(task)}</span></li>"
+        for task in tasks
+    )
+    title = first_week.get("title")
+    source = f"<p class='widget-note'>{_escape(title)}</p>" if title else ""
+    return f"{source}<ul class='task-list' aria-label='1주 차 할 일(읽기 전용)'>{items}</ul>"
+
+
+def _render_home_widgets(data: dict, *, interactive: bool = True) -> None:
+    with st.container(key="home_widgets", gap=None):
+        _widget("leave", "잔여 연차", _leave_widget_body(data.get("annual_leave") or {}), interactive=interactive)
+        _widget(
+            "tickets", "내 비품 신청",
+            _ticket_widget_body(data.get("ticket_counts") or {}, data.get("latest_ticket")),
+            more="equipment", count=f"전체 {data.get('tickets_total', 0)}건", interactive=interactive,
+        )
+        _widget(
+            "notices", "최근 공지", _notice_widget_body(data.get("announcements") or []),
+            more="notices", count=f"전체 {data.get('announcements_total', 0)}건", interactive=interactive,
+        )
+        _widget(
+            "tasks", "1주 차 할 일", _tasks_widget_body(data.get("first_week") or {}),
+            more="library", interactive=interactive,
+        )
+
+
+def _render_employee_home(data: dict, *, interactive: bool = True) -> None:
+    with st.container(key="home_layout", gap=None):
+        with st.container(key="home_id_column", gap=None):
+            st.markdown(_id_card_html(data.get("company_name") or "", data["employee"]), unsafe_allow_html=True)
+        _render_home_widgets(data, interactive=interactive)
+
+
+def _page_employee_home(agent: OfficeGenieAgent, auth: dict) -> None:
+    name = auth.get("name") or ""
+    _page_heading("나의 온보딩", f"{name}님, 반가워요. 회사 생활에 필요한 정보를 한눈에 확인하세요.")
+    with st.spinner("정보를 불러오는 중입니다."):
+        result = agent.employee_call("ui_get_home", auth["company_id"], auth["employee_id"])
+    if result.get("code") == "INVALID_SESSION":
+        _logout(result.get("message", ""))
+        st.rerun()
+    if not result.get("ok"):
+        _read_error(result.get("message"), "employee_home")
+        return
+    _render_employee_home(result["data"])
+    st.markdown(
+        "<p class='dashboard-help'>궁금한 점이 있나요? 오른쪽 아래 지니에게 물어보세요.</p>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---- 관리자 홈 ----------------------------------------------------------------
+
+
+def _close_preview() -> None:
+    st.session_state.pop("preview_employee_id", None)
+
+
+def _open_preview() -> None:
+    picked = st.session_state.get("preview_pick")
+    if picked:
+        st.session_state.preview_employee_id = picked
+
+
+def _render_admin_preview(agent: OfficeGenieAgent, auth: dict, employee_id: str) -> None:
+    result = _admin(agent, auth, "ui_admin_preview_employee", employee_id=employee_id)
+    with st.container(key="preview_banner", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+        if result.get("ok"):
+            who = result["data"]["employee"]
+            label = f"직원 화면 미리보기 · {who['name']} ({who['employee_id']}) · 읽기 전용"
+        else:
+            label = "직원 화면 미리보기"
+        st.markdown(f"<span class='preview-label'>{_escape(label)}</span>", unsafe_allow_html=True, width="content")
+        st.button("미리보기 닫기", key="preview_close", on_click=_close_preview)
+    if not result.get("ok"):
+        st.error(result.get("message") or CONNECTION_ERROR)
+        return
+    st.caption("사원이 보는 홈 화면입니다. 미리보기에서는 신청·변경을 할 수 없습니다.")
+    _render_employee_home(result["data"], interactive=False)
+
+
+def _page_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
+    preview_id = st.session_state.get("preview_employee_id")
+    if preview_id:
+        _render_admin_preview(agent, auth, preview_id)
+        return
+    _page_heading("관리자 홈", "회사 현황을 확인하고 위 메뉴에서 업무를 관리하세요.")
+    data = _admin_read(agent, auth, "ui_admin_home")
+    if data is None:
+        return
+    with st.container(key="admin_home_layout", gap=None):
+        with st.container(key="admin_company_card", gap=None):
+            st.markdown(
+                f"<span class='eyebrow'>회사</span><h2 class='company-name'>{_escape(data['company_name'])}</h2>"
+                f"<p class='widget-note'>사원 {data['employee_count']}명</p>",
+                unsafe_allow_html=True,
+            )
+            _company_code_copy(data={"code": data["company_code"]}, key="home_company_code")
+        with st.container(key="home_widgets", gap=None):
+            pending = data["pending_tickets"]
+            pending_body = (
+                "<div class='equipment-list compact'>" + "".join(
+                    "<div class='equipment-row'>"
+                    f"{_equipment_icon(str(t['item']))}<div class='equipment-name'>{_escape(t['item'])}"
+                    f"<span class='equipment-quantity'>× {_escape(t['quantity'])}</span>"
+                    f"<small class='equipment-date'>{_escape(t['name'])} · {_escape(t['department'])}</small></div>"
+                    f"<span class='status-badge status-{_equipment_status(t['status'])[1]}'><i></i>"
+                    f"{_escape(_equipment_status(t['status'])[0])}</span></div>"
+                    for t in pending
+                ) + "</div>"
+                if pending else "<div class='dashboard-empty'>처리를 기다리는 신청이 없습니다.</div>"
+            )
+            _widget("pending", "처리 대기 신청", pending_body, more="equipment", count=f"{data['pending_count']}건")
+            _widget("notices", "최근 공지", _notice_widget_body(data["announcements"]), more="notices")
+            uploads = data["recent_uploads"]
+            upload_body = (
+                "<ul class='notice-list widget-list'>" + "".join(
+                    f"<li class='notice-row'><span>{_escape(', '.join(u['kinds']) or '회사 데이터')}</span>"
+                    f"<time class='notice-date'>{_date_label(u['at'])}</time></li>"
+                    for u in uploads
+                ) + "</ul>"
+                if uploads else "<div class='dashboard-empty'>아직 업로드한 회사 데이터가 없습니다.</div>"
+            )
+            _widget("uploads", "최근 업로드", upload_body, more="data")
+            with st.container(key="home_widget_preview", gap=None):
+                st.markdown(
+                    "<div class='widget-head'><h3>직원 화면 미리보기</h3></div>"
+                    "<p class='widget-note'>사원을 골라 그 사원이 보는 홈 화면을 읽기 전용으로 확인합니다.</p>",
+                    unsafe_allow_html=True,
+                )
+                people = data["employees"]
+                if not people:
+                    st.caption("등록된 사원이 없습니다.")
+                else:
+                    labels = {p["employee_id"]: f"{p['name']} · {p['department']} ({p['employee_id']})" for p in people}
+                    st.selectbox("사원 선택", list(labels), format_func=labels.get, key="preview_pick")
+                    st.button("미리보기", key="preview_open", type="primary", on_click=_open_preview)
+
+
+# ---------------------------------------------------------------------------
 # 관리자 메뉴. 모든 호출은 agent.admin_call로 가고, 서버가 관리자 여부를 다시 확인한다.
 # ---------------------------------------------------------------------------
 
@@ -3693,21 +4072,6 @@ def _admin_section_tabs(key: str, sections: list[tuple[str, str, object]]) -> No
                     selection = st.session_state.get(f"manager_{section}_selection", (None, None))
                     with _view_container(selection, f"_manager_{section}_slot"):
                         render()
-
-
-def _page_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
-    profile = {"name": "관리자", "department": auth["company_name"], "position": auth["account_id"]}
-    st.markdown(
-        _onboarding_welcome("관리자", "회사 소식을 확인하고 위 메뉴에서 업무를 관리하세요."),
-        unsafe_allow_html=True,
-    )
-    st.markdown(_onboarding_profile(profile, None), unsafe_allow_html=True)
-    data = _admin_read(agent, auth, "ui_admin_list_announcements")
-    announcements = [notice for notice in data["announcements"] if notice["is_public"]] if data else None
-    st.markdown(
-        _onboarding_cards(None, announcements, equipment_unavailable="연결된 사원 정보가 없습니다."),
-        unsafe_allow_html=True,
-    )
 
 
 def _page_admin_notices(agent: OfficeGenieAgent, auth: dict) -> None:

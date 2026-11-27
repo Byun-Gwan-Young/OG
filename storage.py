@@ -984,6 +984,44 @@ def get_tickets(company_id: str, employee_id: str | None = None) -> list[dict]:
     return [_record_ticket(row) for row in rows]
 
 
+def list_my_tickets(company_id: str, employee_id: str) -> list[dict]:
+    """본인 신청만 최신순. 상태 변경 이력(처리자 제외)과 최근 변경 시각을 함께 준다."""
+    statement = (
+        select(tickets)
+        .where(and_(tickets.c.company_id == company_id, tickets.c.employee_id == employee_id))
+        .order_by(tickets.c.ticket_order.desc())
+    )
+    rows = _run_db(lambda conn: [dict(row) for row in conn.execute(statement).mappings()])
+    result = []
+    for row in rows:
+        record = _record_ticket(row)
+        history = [
+            {
+                "at": entry.get("at"),
+                "from": entry.get("from"),
+                "to": entry.get("to"),
+                "note": entry.get("note") or "",
+            }
+            for entry in (row.get("history") or [])
+            if isinstance(entry, dict)
+        ]
+        result.append(
+            {
+                "ticket_id": record["ticket_id"],
+                "type": record["type"],
+                "item": record["item"],
+                "quantity": record["quantity"],
+                "purpose": record.get("purpose") or "",
+                "status": record["status"],
+                "created_at": record["created_at"],
+                "updated_at": history[-1]["at"] if history else record["created_at"],
+                "scheduled_date": record.get("scheduled_date"),
+                "history": history,
+            }
+        )
+    return result
+
+
 def _json_extra(record: dict, known: set[str]) -> dict:
     extra = _row_extra(record, known)
     return {key: value for key, value in extra.items() if key != "password"}

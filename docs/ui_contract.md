@@ -105,6 +105,25 @@ agent.get_sidebar(company_id, employee_id)
 - `scheduled_date`는 YYYY-MM-DD 또는 `None`입니다. `announcements`는 로그인한 사원의 회사에 공개된 공지만 반환합니다.
 - **다시 불러오는 시점**: 응답의 `tickets_changed`가 `True`일 때 (아래 3장)
 
+### 2-2-1. 홈(사원증) · 관리자 홈 · 직원 화면 미리보기
+
+```python
+agent.employee_call("ui_get_home", company_id, employee_id)
+# → data = {"company_name", "employee": {employee_id, name, department, position|None, job_title|None,
+#            onboarding_week|None}, "annual_leave": {...}, "ticket_counts": {상태: 개수}, "tickets_total",
+#           "latest_ticket": {...}|None, "announcements": [공개 공지 최대 3개], "announcements_total",
+#           "first_week": {"title", "tasks": [소속 부서 인수인계서의 '1주 차 할 일']}}
+agent.admin_call("ui_admin_home", company_id, account_id)
+# → {"company_name", "company_code", "employee_count", "employees": [{employee_id, name, department}],
+#    "pending_count", "pending_tickets": [최대 5건], "announcements": [최근 3개], "recent_uploads": [최근 3건],
+#    "has_data"}
+agent.admin_call("ui_admin_preview_employee", company_id, account_id, employee_id="EMP001")
+# → ui_get_home과 같은 data + {"preview": True}. 같은 회사 사원만(없으면 NOT_FOUND), 감사 로그 preview_employee.
+```
+
+- 미리보기 화면은 읽기 전용이다. 신청 폼·챗봇·더보기 버튼을 그리지 않고, 관리자 세션으로는
+  `ui_confirm_ticket`이 INVALID_SESSION이라 티켓이 만들어지지 않는다.
+
 ### 2-3. 채팅 입력
 
 ```python

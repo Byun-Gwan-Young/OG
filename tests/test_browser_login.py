@@ -132,7 +132,7 @@ def test_bridgesoft_employee_logs_in_from_real_browser(
     page = _login(browser, app_url, code, account_id, password or _json_password(account_id))
     try:
         page.get_by_role("heading", name="나의 온보딩", exact=True).wait_for(timeout=30_000)
-        page.get_by_role("heading", name="내 비품 내역", exact=True).wait_for()
+        page.get_by_role("heading", name="내 비품 신청", exact=True).wait_for()
         assert page.get_by_text("로그인").count() == 0 or page.get_by_text("로그아웃").count()
         assert page.get_by_text("화면을 불러오는 중 문제가 발생했습니다").count() == 0
     finally:

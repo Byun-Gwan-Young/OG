@@ -401,8 +401,12 @@ def test_manager_equipment_date_and_announcement_visibility_in_employee_dashboar
     _button(at, "로그아웃").click().run()
     _login(at, code, "EMP001", _password("bridgesoft", "EMP001"))
     page = _all_markdown(at)
+    assert "사원 공개 공지" in page and "NEW" in page  # 홈 최근 공지 위젯
+    _goto(at, "notices")
+    assert "사원 공개 공지" in _all_markdown(at) and "&#10;&#10;2. 둘째 줄" in _all_markdown(at)
+    _goto(at, "equipment")
+    page = _all_markdown(at)
     assert "지급 예정" in page and "지급 예정일 2026-12-07" in page
-    assert "사원 공개 공지" in page and "&#10;&#10;2. 둘째 줄" in page
 
     _button(at, "로그아웃").click().run()
     _login(at, code, "ADMIN", "admin-pass-1")
@@ -416,6 +420,8 @@ def test_manager_equipment_date_and_announcement_visibility_in_employee_dashboar
     _login(at, code, "EMP001", _password("bridgesoft", "EMP001"))
     assert "사원 공개 공지" not in _all_markdown(at)
     assert "등록된 공지사항이 없습니다" in _all_markdown(at)
+    _goto(at, "notices")
+    assert "사원 공개 공지" not in _all_markdown(at)
 
 
 def test_manager_policy_search_detail_and_back_preserves_filters():

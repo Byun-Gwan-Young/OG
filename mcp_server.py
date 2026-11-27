@@ -1329,6 +1329,133 @@ def ui_get_sidebar(company_id: str, employee_id: str) -> dict:
     )
 
 
+# 인수인계서 summary 필드 이름(templates/handovers.json 양식). 회사별 내용이 아니라 양식 이름이다.
+FIRST_WEEK_KEY = "1주 차 할 일"
+PENDING_TICKET_STATUSES = ("접수완료", "검토중")
+HOME_NOTICE_COUNT = 3
+
+
+def _first_week_tasks(company_id: str, department: str) -> dict:
+    """소속 부서 인수인계서의 '1주 차 할 일'(읽기 전용)."""
+    for handover in load(company_id, "handovers").get("handovers", []):
+        if handover.get("department") != department:
+            continue
+        tasks = (handover.get("summary") or {}).get(FIRST_WEEK_KEY)
+        if isinstance(tasks, str):
+            tasks = [tasks]
+        return {
+            "title": handover.get("title") or "",
+            "tasks": [str(task) for task in (tasks or []) if str(task).strip()],
+        }
+    return {"title": "", "tasks": []}
+
+
+def _home_payload(company_id: str, me: dict) -> dict:
+    """사원증 홈 화면 데이터. 사원 본인 화면과 관리자 미리보기가 같이 쓴다."""
+    company = storage.get_company(company_id) or {}
+    tickets = storage.list_my_tickets(company_id, me["employee_id"])
+    counts: dict[str, int] = {}
+    for ticket in tickets:
+        counts[ticket["status"]] = counts.get(ticket["status"], 0) + 1
+    notices = storage.list_announcements(company_id, public_only=True)
+    leave = me.get("annual_leave") or {}
+    week = me.get("onboarding_week")
+    return {
+        "company_name": company.get("company_name") or company_id,
+        "employee": {
+            "employee_id": me["employee_id"],
+            "name": me["name"],
+            "department": me["department"],
+            "position": me.get("position") or None,
+            "job_title": me.get("job_title") or None,
+            "onboarding_week": week if isinstance(week, int) and week > 0 else None,
+        },
+        "annual_leave": {
+            "remaining_days": leave.get("remaining_days"),
+            "granted_days": leave.get("granted_days"),
+            "used_days": leave.get("used_days"),
+            "as_of": leave.get("as_of"),
+        },
+        "ticket_counts": counts,
+        "tickets_total": len(tickets),
+        "latest_ticket": tickets[0] if tickets else None,
+        "announcements": notices[:HOME_NOTICE_COUNT],
+        "announcements_total": len(notices),
+        "first_week": _first_week_tasks(company_id, me["department"]),
+    }
+
+
+@mcp.tool
+@_storage_safe
+def ui_get_home(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 사원증 홈: 회사명·사원증 정보, 잔여 연차, 신청 진행 상황, 최근 공지 3개,
+    소속 부서 인수인계서의 '1주 차 할 일'."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    return ok(data=_home_payload(company_id, me))
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_preview_employee(
+    company_id: str, actor_account_id: str, employee_id: str
+) -> dict:
+    """[UI 전용·관리자] 직원 화면 미리보기(읽기 전용). 같은 회사 사원만, 감사 로그를 남긴다."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    target = storage.get_employee(company_id, str(employee_id or ""))
+    if target is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    storage.record_admin_view(company_id, actor_account_id, "preview_employee", target["employee_id"])
+    return ok(data={**_home_payload(company_id, target), "preview": True})
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_home(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 관리자 홈: 회사 카드, 처리 대기 신청, 최근 공지, 최근 업로드."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    overview = storage.company_overview(company_id)
+    if overview is None:
+        return fail("PERMISSION_DENIED", MSG["ADMIN_ONLY"])
+    pending = [
+        t for t in storage.admin_list_tickets(company_id) if t["status"] in PENDING_TICKET_STATUSES
+    ]
+    uploads = [
+        {
+            "at": row["at"],
+            "actor": row["actor"],
+            "kinds": list((row.get("detail") or {}).get("kinds") or []),
+        }
+        for row in storage.list_audit_log(company_id, 300)
+        if row["action"] in ("upload_applied", "company_import")
+    ][:3]
+    people = storage.admin_list_employees(company_id)
+    return ok(
+        data={
+            "company_name": overview["company_name"],
+            "company_code": overview["company_code"],
+            "employee_count": len(people),
+            "employees": [
+                {"employee_id": p["employee_id"], "name": p["name"], "department": p["department"]}
+                for p in people
+            ],
+            "pending_count": len(pending),
+            "pending_tickets": [
+                {k: t[k] for k in ("ticket_id", "name", "department", "item", "quantity", "status", "created_at")}
+                for t in pending[:5]
+            ],
+            "announcements": storage.list_announcements(company_id)[:HOME_NOTICE_COUNT],
+            "recent_uploads": uploads,
+            "has_data": overview["has_data"],
+        }
+    )
+
+
 @mcp.tool
 @_storage_safe
 def ui_record_page_denied(company_id: str, employee_id: str, page: str) -> dict:
