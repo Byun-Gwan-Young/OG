@@ -3098,7 +3098,7 @@
       "category": "회의실 이용 규정",
       "article": "제1조",
       "title": "회의실 예약 및 취소",
-      "content": "회의실 사용자는 사내 예약표에 일정, 인원, 사용 목적을 등록한다. 예약을 사용하지 못하게 된 경우 회의 시작 시작 10분 전까지 예약을 취소하고, 사용 후 장비와 공간을 원상 복구한다.",
+      "content": "회의실 사용자는 사내 예약표에 일정, 인원, 사용 목적을 등록한다. 예약을 사용하지 못하게 된 경우 회의 시작 10분 전까지 예약을 취소하고, 사용 후 장비와 공간을 원상 복구한다.",
       "source": "(주)브릿지소프트 프로젝트용 가상 사내 운영규정",
       "has_template_blanks": false,
       "keywords": [
@@ -3219,7 +3219,7 @@
   "custom_company_policy_source": "프로젝트용 임의 설정. 식대 12,000원은 OfficeGenie PRD 검증 기준과 일치.",
   "company_id": "bridgesoft",
   "company_name": "(주)브릿지소프트",
-  "data_version": "1.7-position-annual-leave",
+  "data_version": "1.8-bridgesoft-demo-ready",
   "demo_test_case_refs": {
     "normal_1": {
       "policy_id": "BS-103",

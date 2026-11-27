@@ -1,7 +1,7 @@
 {
   "company_id": "bridgesoft",
   "company_name": "(주)브릿지소프트",
-  "data_version": "1.7-position-annual-leave",
+  "data_version": "1.8-bridgesoft-demo-ready",
   "notice": "프로젝트 시연용 데이터: 직급별 연차 기준과 기존 부여 일수를 비교해 annual_leave로 통합. 실제 법정 연차의 정확한 검증은 근속기간 및 출근율 데이터가 필요함.",
   "employees": [
     {
