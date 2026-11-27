@@ -124,6 +124,17 @@ agent.admin_call("ui_admin_preview_employee", company_id, account_id, employee_i
 - 미리보기 화면은 읽기 전용이다. 신청 폼·챗봇·더보기 버튼을 그리지 않고, 관리자 세션으로는
   `ui_confirm_ticket`이 INVALID_SESSION이라 티켓이 만들어지지 않는다.
 
+### 2-2-2. 공지사항 메뉴
+
+```python
+agent.employee_call("ui_list_notices", company_id, employee_id)
+# → {"announcements": [공개 공지만, 최신순 {announcement_id, title, body, is_public, created_at, published_at}]}
+```
+
+- 사원 화면은 7일 이내 공지에 NEW 배지를 붙이고, 제목·본문 검색과 펼쳐 보기를 제공한다.
+- 관리자 "공지사항 관리"는 기존 `ui_admin_list_announcements` / `ui_admin_save_announcement`를 그대로 쓴다
+  (목록에서 바로 수정·공개 전환).
+
 ### 2-3. 채팅 입력
 
 ```python

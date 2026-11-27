@@ -1458,6 +1458,16 @@ def ui_admin_home(company_id: str, actor_account_id: str) -> dict:
 
 @mcp.tool
 @_storage_safe
+def ui_list_notices(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 공지사항 메뉴: 공개 공지만 최신순."""
+    _, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    return ok(data={"announcements": storage.list_announcements(company_id, public_only=True)})
+
+
+@mcp.tool
+@_storage_safe
 def ui_record_page_denied(company_id: str, employee_id: str, page: str) -> dict:
     """[UI 전용] 사원이 관리자 전용 페이지 주소로 들어온 것을 감사 로그에 남긴다.
 

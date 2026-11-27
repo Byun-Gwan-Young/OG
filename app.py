@@ -2019,6 +2019,37 @@ def _render_shell_styles() -> None:
             .st-key-home_widgets { gap: 14px; }
             [class*="st-key-home_widget_"] { min-height: 0; padding: 18px 18px 8px; }
             .st-key-preview_banner { top: 60px; }
+            .st-key-notice_board, .st-key-library_board, .st-key-equipment_board { padding: 16px; }
+            [class*="st-key-notice_admin_row_"] { flex-wrap: wrap !important; }
+            [class*="st-key-notice_admin_row_"] > div:first-child { flex-basis: 100% !important; }
+        }
+
+        /* ---- 공지사항 ---- */
+        .st-key-notice_board, .st-key-library_board, .st-key-equipment_board {
+            padding: 24px; background: var(--card); border: 1px solid var(--line);
+            border-radius: var(--radius-section); box-shadow: var(--shadow-soft); gap: 12px !important;
+        }
+        .list-count { margin: 4px 0 8px; color: var(--muted); font-size: 13px; }
+        .notice-page-entry summary.notice-row { min-height: 60px; padding: 4px 4px; }
+        .notice-page-entry summary.notice-row:hover { background: var(--page); }
+        .notice-page-entry[open] summary .notice-title { color: var(--blue); font-weight: 650; }
+        .notice-page-entry .notice-body { padding: 4px 4px 20px; line-height: 1.7; }
+        .empty-state {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            padding: 40px 16px; text-align: center; color: var(--muted); font-size: 14px;
+        }
+        .empty-state strong { color: var(--body); font-size: 15px; }
+        [class*="st-key-notice_admin_row_"] {
+            min-height: 64px; padding: 6px 4px; border-bottom: 1px solid #E7ECF3;
+        }
+        [class*="st-key-notice_admin_row_"] > div:first-child { flex: 1 1 auto !important; min-width: 0; }
+        .notice-admin-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .notice-admin-title strong { color: var(--title); font-size: 15px; font-weight: 600; }
+        .notice-admin-title span { color: var(--muted); font-size: 12px; }
+        [class*="st-key-notice_admin_row_"] button { min-height: 40px; white-space: nowrap; }
+        .st-key-notice_inline_form {
+            margin: 8px 0 12px; padding: 18px 20px; border-radius: 12px;
+            background: var(--page); border: 1px solid var(--input-line);
         }
 
         /* ---- 모바일 하단 탭바: PC에서는 숨긴다 ---- */
@@ -3663,38 +3694,120 @@ def _manager_announcement_form(agent: OfficeGenieAgent, auth: dict, notice: dict
         _manager_result(result, "notices", "공지사항이 저장되었습니다.")
 
 
+def _notice_matches(notice: dict, query: str) -> bool:
+    return not query or query in _manager_term(notice.get("title")) or query in _manager_term(notice.get("body"))
+
+
+def _notice_details_html(notices: list[dict]) -> str:
+    return "".join(
+        "<details class='notice-entry notice-page-entry'><summary class='notice-row'>"
+        f"<span class='notice-title'>{_escape(n.get('title'))}"
+        + ("<em class='new-badge'>NEW</em>" if _is_new(n.get("published_at") or n.get("created_at")) else "")
+        + f"</span><time class='notice-date'>{_date_label(n.get('published_at') or n.get('created_at'))}</time>"
+        "</summary>"
+        f"<div class='notice-body'>{_escaped_lines(n.get('body'))}</div></details>"
+        for n in notices
+    )
+
+
+def _page_employee_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("공지사항", "회사 소식을 확인하세요. 제목을 누르면 내용이 펼쳐집니다.")
+    result = agent.employee_call("ui_list_notices", auth["company_id"], auth["employee_id"])
+    if result.get("code") == "INVALID_SESSION":
+        _logout(result.get("message", ""))
+        st.rerun()
+    if not result.get("ok"):
+        _read_error(result.get("message"), "employee_notices")
+        return
+    notices = result["data"]["announcements"]
+    with st.container(key="notice_board", gap=None):
+        query = _manager_term(
+            st.text_input(
+                "공지 검색", key="notice_query", placeholder="제목이나 내용으로 검색",
+                label_visibility="collapsed", icon=":material/search:",
+            )
+        )
+        matches = [n for n in notices if _notice_matches(n, query)]
+        if not notices:
+            body = "<div class='empty-state'><strong>등록된 공지사항이 없습니다.</strong><span>새 공지가 올라오면 여기에 표시됩니다.</span></div>"
+        elif not matches:
+            body = "<div class='empty-state'><strong>검색 결과가 없습니다.</strong><span>다른 단어로 검색해 보세요.</span></div>"
+        else:
+            body = f"<p class='list-count'>총 {len(matches)}건</p><div class='notice-list'>{_notice_details_html(matches)}</div>"
+        st.markdown(body, unsafe_allow_html=True)
+
+
+def _toggle_notice_public(agent: OfficeGenieAgent, auth: dict, notice: dict) -> None:
+    result = _admin(
+        agent, auth, "ui_admin_save_announcement", title=notice["title"], body=notice["body"],
+        is_public=not notice["is_public"], announcement_id=notice["announcement_id"],
+    )
+    if result.get("ok"):
+        st.session_state.manager_success = "공개 상태를 변경했습니다."
+    else:
+        st.session_state.manager_error = result.get("message") or CONNECTION_ERROR
+
+
 def _manager_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    """공지사항 관리: 목록에서 바로 수정·공개 전환, 위에서 새 공지 작성."""
     result = _admin_read(agent, auth, "ui_admin_list_announcements")
     if result is None:
         return
     notices = result["announcements"]
     mode, notice_id = st.session_state.get("manager_notices_selection", (None, None))
-    if mode == "add":
-        _manager_announcement_form(agent, auth, None)
-        return
-    if mode == "edit":
-        notice = next((n for n in notices if n["announcement_id"] == notice_id), None)
-        if notice:
-            _manager_announcement_form(agent, auth, notice)
-        else:
-            st.info("해당 공지를 찾을 수 없습니다.")
-            st.button("공지사항 목록", on_click=_manager_select, args=("notices", None))
-        return
-    with st.container(horizontal=True, horizontal_alignment="distribute"):
-        _manager_heading("공지사항 목록", "사원에게 전달할 소식을 작성하고 공개 여부를 관리하세요.", f"총 {len(notices)}건")
+    error = st.session_state.pop("manager_error", "")
+    if error:
+        st.error(error)
+    with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+        _manager_heading("공지사항 목록", "제목을 눌러 수정하거나 공개 상태를 바로 바꿀 수 있습니다.", f"총 {len(notices)}건")
         st.button("＋ 공지 작성", type="primary", on_click=_manager_select, args=("notices", "add"))
+    if mode == "add":
+        with st.container(key="notice_inline_form"):
+            _manager_announcement_form(agent, auth, None)
     if not notices:
-        st.info("등록된 공지사항이 없습니다.")
+        st.markdown(
+            "<div class='empty-state'><strong>등록된 공지사항이 없습니다.</strong>"
+            "<span>‘＋ 공지 작성’으로 첫 공지를 올려 보세요.</span></div>",
+            unsafe_allow_html=True,
+        )
         return
-    query, _ = _manager_filter("notices", "제목 검색")
+    query, visibility = _manager_filter("notices", "제목 검색", ["공개", "비공개"], "전체 공개 상태")
     rows = [
-        (n["announcement_id"], (
-            n["title"], str(n["published_at"] or "—")[:10].replace("-", "."),
-            ("공개", "green") if n["is_public"] else ("비공개", "gray"),
-        ))
-        for n in notices if query in _manager_term(n["title"])
+        n for n in notices
+        if query in _manager_term(n["title"])
+        and (visibility is None or (visibility == "공개") == bool(n["is_public"]))
     ]
-    _manager_table("notices", ("제목", "게시일", "공개 상태"), (4, 1.5, 1.45, 1), rows, "수정", "edit")
+    if not rows:
+        st.info("표시할 검색 결과가 없습니다.")
+        return
+    with st.container(key="notice_admin_list", gap=None):
+        for notice in rows:
+            nid = notice["announcement_id"]
+            with st.container(key=f"notice_admin_row_{nid}", horizontal=True, vertical_alignment="center", gap="small"):
+                badge = ("공개", "green") if notice["is_public"] else ("비공개", "gray")
+                st.markdown(
+                    f"<div class='notice-admin-title'><strong>{_escape(notice['title'])}</strong>"
+                    f"<span>{_date_label(notice['published_at'] or notice['created_at'])}</span></div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(_manager_badge(*badge), unsafe_allow_html=True, width="content")
+                st.button(
+                    "비공개로" if notice["is_public"] else "공개하기", key=f"notice_toggle_{nid}",
+                    on_click=_toggle_notice_public, args=(agent, auth, notice),
+                )
+                st.button(
+                    "수정", key=f"manager_notices_row_{nid}", type="primary" if (mode, notice_id) == ("edit", nid) else "secondary",
+                    on_click=_manager_select, args=("notices", "edit", nid),
+                )
+            if (mode, notice_id) == ("edit", nid):
+                with st.container(key="notice_inline_form"):
+                    _manager_announcement_form(agent, auth, notice)
+
+
+def _page_admin_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("공지사항 관리", "사원에게 전달할 소식을 작성하고 공개 여부를 관리하세요.")
+    with st.container(key="manager_card"):
+        _manager_notices(agent, auth)
 
 
 def _manager_policies(agent: OfficeGenieAgent, auth: dict) -> None:
@@ -3763,13 +3876,6 @@ def _employee_sidebar(agent: OfficeGenieAgent, auth: dict) -> dict | None:
             _read_error(result.get("message"), "employee_sidebar")
             return None
     return result.get("data") or {}
-
-
-def _page_employee_notices(agent: OfficeGenieAgent, auth: dict) -> None:
-    _page_heading("공지사항", "회사 소식을 확인하세요.")
-    data = _employee_sidebar(agent, auth)
-    announcements = data.get("announcements") if data is not None else None
-    st.markdown(_onboarding_cards([], announcements), unsafe_allow_html=True)
 
 
 def _page_employee_library(agent: OfficeGenieAgent, auth: dict) -> None:
@@ -4072,14 +4178,6 @@ def _admin_section_tabs(key: str, sections: list[tuple[str, str, object]]) -> No
                     selection = st.session_state.get(f"manager_{section}_selection", (None, None))
                     with _view_container(selection, f"_manager_{section}_slot"):
                         render()
-
-
-def _page_admin_notices(agent: OfficeGenieAgent, auth: dict) -> None:
-    _page_heading("공지사항 관리", "사원에게 전달할 소식을 작성하고 공개 여부를 관리하세요.")
-    with st.container(key="manager_card"):
-        selection = st.session_state.get("manager_notices_selection", (None, None))
-        with _view_container(selection, "_manager_notices_slot"):
-            _manager_notices(agent, auth)
 
 
 def _page_admin_library(agent: OfficeGenieAgent, auth: dict) -> None:
