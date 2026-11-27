@@ -1,0 +1,24 @@
+# 오피스지니 리버스 프록시. 도메인·메일은 .env.production에서 받는다(docker-compose.yml의 caddy environment).
+# - 80/443만 외부에 열고, 웹(8501)·MCP(8000)는 Docker 내부 네트워크로만 연결한다.
+# - 공인 도메인이면 Let's Encrypt 인증서를 자동으로 받고 갱신한다(인증서는 caddy_data 볼륨에 보관).
+#   WEB_DOMAIN=localhost처럼 로컬 이름이면 Caddy 내부 인증서를 쓴다(로컬 확인용).
+# - reverse_proxy는 웹소켓(Streamlit /_stcore/stream)을 그대로 통과시키고,
+#   X-Forwarded-For / X-Forwarded-Proto(https) / X-Forwarded-Host를 붙인다. Host 헤더는 원래 값을 유지한다.
+#   앱은 X-Forwarded-Proto로 로그인 쿠키 Secure와 https 주소를 정한다.
+{
+	email {$ACME_EMAIL}
+}
+
+{$WEB_DOMAIN} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy web:8501
+}
+
+{$MCP_DOMAIN} {
+	header Strict-Transport-Security "max-age=31536000"
+	# MCP Streamable HTTP(SSE) 응답은 버퍼링 없이 바로 흘려보낸다.
+	reverse_proxy mcp:8000 {
+		flush_interval -1
+	}
+}

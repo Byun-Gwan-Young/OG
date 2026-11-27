@@ -1,0 +1,29 @@
+# 비밀 값: 이미지에 넣지 않는다(실행할 때 env_file로만 받는다).
+.env
+.env.*
+!env.example
+!env.production.example
+.env.production
+
+# 로컬 개발 산출물
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.playwright-mcp/
+officegenie.db
+officegenie.db-journal
+tokens.json
+*.tmp
+
+# 이미지에 필요 없는 것
+.git/
+.gitignore
+docs/images/
+tests/
+deploy/
+Dockerfile
+docker-compose.yml
+.dockerignore
+Caddyfile

@@ -8,3 +8,4 @@ officegenie.db
 officegenie.db-journal
 .venv/
 /__assets__/
+.env.production
