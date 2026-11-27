@@ -61,6 +61,7 @@ def test_compose_exposes_only_caddy():
         assert [str(p) for p in svc["expose"]] == [port]
     published = {str(p).split(":")[0] for p in services["caddy"]["ports"]}
     assert published == {"80", "443"}
+    assert not any(str(p).endswith("/udp") for p in services["caddy"]["ports"])  # HTTP/3(UDP) 안 씀
 
 
 def test_compose_restart_logging_healthchecks():
@@ -120,6 +121,18 @@ def test_caddyfile_routes():
     assert "reverse_proxy mcp:8000" in mcp
     # 헤더를 지우거나 덮어쓰는 설정이 없어야 앱이 X-Forwarded-Proto로 https를 판단한다.
     assert "header_up -X-Forwarded" not in text and "tls internal" not in text
+
+
+def test_caddy_disables_http3_and_clears_alt_svc():
+    """보안 그룹이 UDP 443을 막으므로 HTTP/3 광고(Alt-Svc: h3)를 하면 아이콘 폰트 등 나중 요청이 실패한다."""
+    text = (ROOT / "Caddyfile").read_text("utf-8")
+    assert re.search(r"servers \{\s*protocols h1 h2\s*\}", text)
+    assert 'header Alt-Svc "clear"' in text
+    common = re.search(r"\(common\) \{(.*?)\n\}", text, re.S).group(1)
+    assert "Strict-Transport-Security" in common
+    for domain in ("WEB_DOMAIN", "MCP_DOMAIN"):
+        block = re.search(r"\{\$" + domain + r"\} \{(.*?)\n\}", text, re.S).group(1)
+        assert "import common" in block
 
 
 def test_env_production_never_committed_or_baked():

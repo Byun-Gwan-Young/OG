@@ -5,18 +5,29 @@
 # - reverse_proxy는 웹소켓(Streamlit /_stcore/stream)을 그대로 통과시키고,
 #   X-Forwarded-For / X-Forwarded-Proto(https) / X-Forwarded-Host를 붙인다. Host 헤더는 원래 값을 유지한다.
 #   앱은 X-Forwarded-Proto로 로그인 쿠키 Secure와 https 주소를 정한다.
+# - HTTP/3(QUIC, UDP 443)은 끈다. EC2 보안 그룹은 TCP 80/443만 열기 때문에, Caddy가 HTTP/3를 광고하면
+#   (Alt-Svc: h3) 브라우저가 나중 요청(아이콘 폰트 등)을 막힌 UDP로 보내다 실패해 아이콘 이름 글자가 보였다.
+#   Alt-Svc: clear로 브라우저가 기억한 HTTP/3 정보도 지운다.
 {
 	email {$ACME_EMAIL}
+	servers {
+		protocols h1 h2
+	}
+}
+
+(common) {
+	header Strict-Transport-Security "max-age=31536000"
+	header Alt-Svc "clear"
 }
 
 {$WEB_DOMAIN} {
+	import common
 	encode zstd gzip
-	header Strict-Transport-Security "max-age=31536000"
 	reverse_proxy web:8501
 }
 
 {$MCP_DOMAIN} {
-	header Strict-Transport-Security "max-age=31536000"
+	import common
 	# MCP Streamable HTTP(SSE) 응답은 버퍼링 없이 바로 흘려보낸다.
 	reverse_proxy mcp:8000 {
 		flush_interval -1

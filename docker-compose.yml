@@ -62,7 +62,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp"
+      # HTTP/3(UDP 443)는 쓰지 않는다(Caddyfile에서 끔). 보안 그룹도 TCP 80/443만 연다.
     environment:
       # Caddy에는 도메인·메일만 넘긴다(DB 주소·API 키는 넘기지 않는다).
       WEB_DOMAIN: ${WEB_DOMAIN:?WEB_DOMAIN을 .env.production에 넣으세요}
