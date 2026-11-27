@@ -851,6 +851,7 @@ def _render_styles() -> None:
             border-radius: 16px;
             box-shadow: 0 8px 24px rgba(32, 45, 64, 0.04);
         }
+        .login-wake-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; text-align: center; }
         .login-title {
             padding: 0 !important;
             margin: 0 !important;
@@ -2825,6 +2826,10 @@ def _submit_login() -> None:
         state.login_password = ""
 
 
+# 무료 호스팅은 한동안 요청이 없으면 서버가 잠들고, 깨는 데 최대 1분쯤 걸린다.
+WAKE_NOTE = "한동안 접속이 없었다면 서버가 깨어나느라 처음 로딩에 최대 1분 정도 걸릴 수 있어요."
+
+
 def _render_login() -> None:
     state = st.session_state
     if "login_prefill_code" in st.session_state:
@@ -2873,6 +2878,9 @@ def _render_login() -> None:
                     label, key="login_submit",
                     type="primary", width="stretch", disabled=busy, on_click=_submit_login,
                 )
+            st.markdown(
+                f"<p class='login-wake-note'>{_escape(WAKE_NOTE)}</p>", unsafe_allow_html=True
+            )
     if future is not None:
         try:
             result = future.result()
@@ -3548,6 +3556,11 @@ def _admin_accounts_tab(agent: OfficeGenieAgent, auth: dict) -> None:
                 _apply_cookie_action()
 
 
+def _kst_time(value: object) -> str:
+    moment = _parse_time(value)
+    return moment.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M") if moment else "-"
+
+
 def _admin_mcp_revoke(agent: OfficeGenieAgent, auth: dict) -> None:
     token_id = st.session_state.get("admin_mcp_pick")
     if not token_id:
@@ -3581,9 +3594,9 @@ def _admin_mcp_tokens_tab(agent: OfficeGenieAgent, auth: dict) -> None:
                 "이름": t["name"],
                 "부서": t["department"],
                 "토큰 이름": t["label"],
-                "발급일": _short_time(t["issued_at"]),
-                "마지막 사용": _short_time(t["last_used_at"]) if t["last_used_at"] else "-",
-                "상태": "활성" if t["active"] else f"폐기 {_short_time(t['revoked_at'])}",
+                "발급일": _kst_time(t["issued_at"]),
+                "마지막 사용": _kst_time(t["last_used_at"]),
+                "상태": "활성" if t["active"] else f"폐기 {_kst_time(t['revoked_at'])}",
             }
             for t in tokens
         ],
