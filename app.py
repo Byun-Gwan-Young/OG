@@ -3,7 +3,9 @@ from __future__ import annotations
 import csv
 import html
 import io
+import json
 import logging
+import re
 import time
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -83,6 +85,11 @@ _company_code_copy = st.components.v2.component(
     """,
 )
 SESSION_TIMEOUT_SEC = 30 * 60  # 30분 무동작 시 자동 로그아웃
+# 새로고침 후 로그인 유지: 쿠키에는 서버가 만든 무작위 토큰만 둔다(DB에는 해시만 저장).
+SESSION_COOKIE = "og_session"
+SESSION_COOKIE_MAX_AGE = 12 * 60 * 60
+SESSION_KEEPALIVE_SEC = 5 * 60
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,100}")
 CHAT_FAILURE_CODES = {
     "FALLBACK",
     "LLM_UNAVAILABLE",
@@ -1814,6 +1821,151 @@ def _render_styles() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _render_shell_styles() -> None:
+    """메뉴형 화면 공통 스타일. 팀 디자인 토큰(_render_styles의 :root)을 그대로 쓴다."""
+    st.markdown(
+        r"""
+        <style>
+        :root {
+            /* 기존 값에 이름만 붙인 토큰. 새 색은 추가하지 않는다. */
+            --blue-soft: #EDF3FD;
+            --blue-hover: #315EA9;
+            --radius-card: 20px;
+            --radius-section: 16px;
+            --radius-control: 10px;
+            --radius-pill: 999px;
+            --shadow-card: 0 12px 32px rgba(32, 45, 64, 0.06);
+            --shadow-soft: 0 1px 3px rgba(32, 45, 64, 0.018);
+            --shadow-panel: 0 15px 42px rgba(37, 57, 87, 0.17);
+            --shadow-fab: 0 7px 17px rgba(56, 104, 190, 0.27);
+            --tabbar-height: 64px;
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        /* 한글은 어절 단위로 줄바꿈하고, 긴 영문·숫자는 넘치지 않게 끊는다. */
+        [data-testid="stAppViewContainer"] :is(p, h1, h2, h3, h4, li, span, label, summary, dd, dt, td, th, button) {
+            word-break: keep-all;
+            overflow-wrap: break-word;
+        }
+        .st-key-cookie_sync { position: absolute !important; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+
+        /* ---- 상단 헤더: 로고 + 메뉴 + 사용자 ---- */
+        .st-key-dashboard_root .st-key-site_header {
+            position: sticky; top: 0; z-index: 999;
+            border-width: 0 0 1px 0;
+        }
+        .st-key-top_nav { gap: 4px !important; flex: 0 1 auto; min-width: 0; }
+        .st-key-top_nav button {
+            min-height: 44px; padding: 0 16px !important;
+            border: 0 !important; border-radius: var(--radius-pill) !important;
+            background: transparent !important; color: var(--muted) !important;
+            white-space: nowrap;
+        }
+        .st-key-top_nav button p { font-size: 15px; font-weight: 600; }
+        .st-key-top_nav button:hover { background: var(--page) !important; color: var(--title) !important; }
+        .st-key-top_nav button[data-testid="stBaseButton-primary"] {
+            background: var(--blue-soft) !important; color: var(--blue) !important;
+        }
+        .st-key-top_nav button[data-testid="stBaseButton-primary"] p { font-weight: 700; }
+        .st-key-header_user { gap: 12px !important; }
+        .header-user { color: var(--body); font-size: 14px; font-weight: 600; white-space: nowrap; }
+        .st-key-header_user [data-testid="stMarkdownContainer"] { margin-bottom: 0; }
+        .st-key-header_user .st-key-logout_button button {
+            min-height: 36px !important; padding: 4px 18px !important;
+            border: 0 !important; border-radius: var(--radius-pill) !important;
+            background: var(--blue-soft) !important; color: var(--blue) !important; white-space: nowrap;
+        }
+        .st-key-header_user .st-key-logout_button button p { font-size: 13px; }
+
+        /* ---- 본문 ---- */
+        .st-key-page_main {
+            width: min(1280px, calc(100% - 2 * var(--site-header-gutter))) !important;
+            margin: 0 auto !important;
+            padding: 40px 0 72px !important;
+            gap: 20px;
+        }
+        .st-key-page_main .dashboard-main { width: 100%; padding-top: 0; }
+        .page-heading h1 {
+            margin: 0; padding: 0 !important; color: var(--title);
+            font-size: clamp(24px, 2.4vw, 29px); font-weight: 720; letter-spacing: -0.8px; line-height: 1.35;
+        }
+        .page-heading p { margin: 8px 0 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
+        .st-key-page_main [data-testid="stMarkdownContainer"]:has(> .page-heading) { margin-bottom: 4px; }
+        .st-key-page_main [data-testid="stTabs"] [role="tablist"] { gap: 8px; }
+        .st-key-page_main [data-testid="stTabs"] [role="tab"] { min-height: 48px; padding-inline: 14px; color: var(--muted); }
+        .st-key-page_main [data-testid="stTabs"] [role="tab"][aria-selected="true"] { color: var(--blue); font-weight: 700; }
+        .st-key-page_main [data-testid="stTabs"] [role="tabpanel"] { padding-top: 18px; }
+
+        /* ---- 모바일 하단 탭바: PC에서는 숨긴다 ---- */
+        .st-key-bottom_tabs { display: none !important; }
+
+        @media (max-width: 767.98px) {
+            .st-key-top_nav { display: none !important; }
+            .st-key-dashboard_root .st-key-site_header { min-height: 60px; }
+            .st-key-header_user { gap: 8px !important; }
+            .st-key-header_user .st-key-logout_button button { min-height: 36px !important; padding: 4px 12px !important; }
+            .st-key-page_main {
+                padding: 24px 0 calc(var(--tabbar-height) + 104px + var(--safe-bottom)) !important;
+                gap: 16px;
+            }
+            .page-heading p { font-size: 14px; }
+            .st-key-bottom_tabs {
+                display: flex !important;
+                position: fixed !important;
+                z-index: 10000;
+                left: 0; right: 0; bottom: 0;
+                margin: 0 !important;
+                padding: 4px 4px calc(4px + var(--safe-bottom)) !important;
+                background: var(--card);
+                border-top: 1px solid var(--line);
+                box-shadow: 0 -4px 16px rgba(32, 45, 64, 0.06);
+                gap: 0 !important;
+            }
+            .st-key-bottom_tabs > div { flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; }
+            .st-key-bottom_tabs button {
+                width: 100%; min-height: 56px !important; padding: 4px 2px !important;
+                display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+                border: 0 !important; border-radius: 12px !important;
+                background: transparent !important; color: var(--muted) !important;
+            }
+            .st-key-bottom_tabs button > div, .st-key-bottom_tabs button > span { flex-direction: column; gap: 2px; }
+            .st-key-bottom_tabs button [data-testid="stIconMaterial"] { font-size: 24px; margin: 0 !important; }
+            .st-key-bottom_tabs button p { font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+            .st-key-bottom_tabs button[data-testid="stBaseButton-primary"] { color: var(--blue) !important; }
+            .st-key-bottom_tabs button[data-testid="stBaseButton-primary"] p { font-weight: 750; }
+
+            /* 챗봇 버튼은 탭바 위로 올린다(겹침 방지). */
+            .st-key-chat_fab {
+                right: 16px !important;
+                bottom: calc(var(--tabbar-height) + 16px + var(--safe-bottom)) !important;
+                width: 56px !important; height: 56px !important; min-width: 56px !important;
+            }
+            .st-key-chat_fab [data-testid="stButton"],
+            .st-key-chat_fab button {
+                width: 56px !important; min-width: 56px !important; max-width: 56px !important;
+                height: 56px !important; min-height: 56px !important;
+            }
+            /* 챗봇은 화면 전체를 덮는 시트로 연다. */
+            .st-key-chat_panel {
+                inset: 0 !important;
+                z-index: 10003 !important;
+                width: 100vw !important; min-width: 0 !important; max-width: none !important;
+                height: 100dvh !important; min-height: 0 !important; max-height: none !important;
+                border: 0 !important; border-radius: 0 !important;
+                padding-bottom: var(--safe-bottom) !important;
+            }
+            .st-key-chat_scroll { height: auto !important; flex: 1 1 auto !important; }
+            .st-key-chat_close_button { width: 44px !important; height: 44px !important; top: 15px !important; }
+            .st-key-chat_close_button [data-testid="stButton"],
+            .st-key-chat_close_button button {
+                width: 44px !important; min-width: 44px !important; height: 44px !important; min-height: 44px !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _touch_activity() -> None:
     st.session_state.last_activity = time.monotonic()
 
@@ -1826,7 +1978,10 @@ def _session_expired() -> bool:
 
 
 def _logout(notice: str = "") -> None:
-    """세션 전체(신원·대화·대기 중인 요청)를 지운다."""
+    """세션 전체(신원·대화·대기 중인 요청)를 지우고 서버의 로그인 세션도 폐기한다."""
+    token = st.session_state.get("session_token")
+    if token:
+        get_agent().logout(token)  # 연결 실패는 call_tool이 응답으로 돌려준다
     previous_screen = st.session_state.get("_screen_slot")
     for key in list(st.session_state.keys()):
         del st.session_state[key]
@@ -1834,12 +1989,90 @@ def _logout(notice: str = "") -> None:
         # Keep only the previous display slot so its content can be removed on logout.
         st.session_state["_screen_slot"] = previous_screen
     st.session_state.auth_view = "login"
+    # 이 연결의 쿠키 값은 이미 폐기되었으므로 다시 복원하지 않고, 브라우저 쿠키도 지운다.
+    st.session_state.resume_checked = True
+    st.session_state.cookie_action = ("clear", "")
     if notice:
         st.session_state.auth_notice = notice
 
 
+def _session_cookie_token() -> str:
+    try:
+        token = st.context.cookies.get(SESSION_COOKIE) or ""
+    except Exception:  # AppTest 등 쿠키가 없는 실행 환경
+        return ""
+    return token if isinstance(token, str) and _TOKEN_RE.fullmatch(token) else ""
+
+
+def _restore_login() -> None:
+    """새로고침 후: 브라우저 쿠키의 세션 토큰을 서버에서 확인해 로그인 상태를 되살린다.
+
+    쿠키에는 무작위 토큰만 있고, 신원·역할은 서버가 accounts에서 다시 정한다.
+    """
+    state = st.session_state
+    if state.get("auth") or state.get("resume_checked"):
+        return
+    state.resume_checked = True
+    token = _session_cookie_token()
+    if not token:
+        return
+    result = get_agent().resume_session(token)
+    if not result.get("ok"):
+        if result.get("code") == "INVALID_SESSION":
+            state.cookie_action = ("clear", "")
+        return
+    try:
+        auth = _auth_from_login(result["data"])
+    except (KeyError, TypeError) as exc:
+        _log_post_login_failure("resume_response", exc, None)
+        return
+    state.auth = auth
+    state.session_token = token
+    state.session_checked_at = time.monotonic()
+    _touch_activity()
+
+
+def _session_still_valid(agent: OfficeGenieAgent) -> bool:
+    """몇 분에 한 번 서버 세션을 확인·연장한다. 관리자가 비밀번호를 초기화했거나
+    계정이 비활성화되면 False. 일시적인 연결 오류로는 로그아웃시키지 않는다."""
+    token = st.session_state.get("session_token")
+    if not token:
+        return True
+    if time.monotonic() - st.session_state.get("session_checked_at", 0) < SESSION_KEEPALIVE_SEC:
+        return True
+    result = agent.resume_session(token)
+    if result.get("code") == "SERVER_UNAVAILABLE":
+        return True
+    st.session_state.session_checked_at = time.monotonic()
+    return bool(result.get("ok"))
+
+
+def _apply_cookie_action() -> None:
+    """로그인·로그아웃 직후 한 번만 브라우저 쿠키를 쓰거나 지운다.
+
+    쿠키 값은 서버가 만든 무작위 토큰뿐이다. SameSite=Strict, HTTPS면 Secure.
+    """
+    action = st.session_state.pop("cookie_action", None)
+    if not action:
+        return
+    kind, token = action
+    if kind == "set" and _TOKEN_RE.fullmatch(token or ""):
+        cookie = f"{SESSION_COOKIE}={token}; Path=/; Max-Age={SESSION_COOKIE_MAX_AGE}; SameSite=Strict"
+    else:
+        cookie = f"{SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Strict"
+    with st.container(key="cookie_sync", height=1, border=False):
+        st.html(
+            f"<script>document.cookie = {json.dumps(cookie)} + "
+            "(location.protocol === 'https:' ? '; Secure' : '');</script>",
+            unsafe_allow_javascript=True,
+        )
+
+
 def _on_logout_click() -> None:
     _logout()
+    # 직접 로그아웃하면 다음 사람이 홈에서 시작한다(시간 초과 로그아웃은 보던 메뉴를 유지).
+    if "page" in st.query_params:
+        del st.query_params["page"]
 
 
 @st.fragment(run_every=60)
@@ -1849,39 +2082,146 @@ def _idle_watch() -> None:
         st.rerun(scope="app")
 
 
-def _brand_html() -> str:
-    return (
+# ---------------------------------------------------------------------------
+# 메뉴와 화면 이동
+# 현재 메뉴는 URL 쿼리 ?page= 와 동기화한다(새로고침·뒤로가기·바로가기).
+# page 값은 "어떤 화면을 보여 줄지"만 정한다. 신원·권한은 세션(auth)과 서버가 정한다.
+# ---------------------------------------------------------------------------
+
+# (page, PC 메뉴 이름, 모바일 탭 이름, 아이콘)
+EMPLOYEE_NAV = (
+    ("home", "홈", "홈", ":material/badge:"),
+    ("notices", "공지사항", "공지", ":material/campaign:"),
+    ("library", "자료실", "자료실", ":material/folder_open:"),
+    ("equipment", "비품 신청", "비품", ":material/inventory_2:"),
+)
+ADMIN_NAV = (
+    ("home", "홈", "홈", ":material/space_dashboard:"),
+    ("notices", "공지사항 관리", "공지", ":material/campaign:"),
+    ("library", "자료실 관리", "자료실", ":material/folder_open:"),
+    ("equipment", "비품 관리", "비품", ":material/inventory_2:"),
+    ("employees", "사원", "사원", ":material/group:"),
+    ("data", "데이터·계정", "설정", ":material/settings:"),
+)
+ADMIN_ONLY_PAGES = frozenset(p for p, *_ in ADMIN_NAV) - frozenset(p for p, *_ in EMPLOYEE_NAV)
+PAGE_DENIED_NOTICE = "관리자만 사용할 수 있는 메뉴입니다. 홈으로 이동했습니다."
+
+
+def _nav_for(auth: dict) -> tuple:
+    return ADMIN_NAV if auth.get("role") == "admin" else EMPLOYEE_NAV
+
+
+def _resolve_page(auth: dict) -> tuple[str, str | None]:
+    """URL의 page 값을 역할별 허용 목록과 대조한다. (보여 줄 page, 차단한 관리자 page)."""
+    allowed = {page for page, *_ in _nav_for(auth)}
+    requested = str(st.query_params.get("page") or "home")[:40]
+    page = requested if requested in allowed else "home"
+    denied = requested if requested != page and requested in ADMIN_ONLY_PAGES else None
+    if st.query_params.get("page") != page:
+        st.query_params["page"] = page
+    return page, denied
+
+
+def _go_page(page: str) -> None:
+    _touch_activity()
+    st.query_params["page"] = page
+
+
+def _brand_html(*, admin: bool = False) -> str:
+    brand = (
         "<div class='auth-brand'>"
         "<span class='header-logo'><svg viewBox='0 0 32 32' fill='none' aria-hidden='true'>"
         "<path d='M8.3 8.2h15.4a2.5 2.5 0 0 1 2.5 2.5v8.1a2.5 2.5 0 0 1-2.5 2.5h-7.2l-5.2 3.5v-3.5h-3a2.5 2.5 0 0 1-2.5-2.5v-8.1a2.5 2.5 0 0 1 2.5-2.5Z' stroke='white' stroke-width='1.8' stroke-linejoin='round'/>"
         "<path d='M11 13h10M11 16.5h7' stroke='white' stroke-width='1.7' stroke-linecap='round'/>"
         "</svg></span><strong>오피스 지니</strong></div>"
     )
+    return f"<div class='manager-brand'>{brand}<span>관리자</span></div>" if admin else brand
 
 
-def _render_site_header(*, logout: bool = False, admin_dashboard: bool = False) -> None:
+def _render_site_header(*, logout: bool = False, auth: dict | None = None, page: str | None = None) -> None:
     with st.container(
         key="site_header", horizontal=True, wrap=False, horizontal_alignment="distribute",
         vertical_alignment="center",
     ):
-        brand = _brand_html()
-        if admin_dashboard:
-            brand = f"<div class='manager-brand'>{brand}<span>관리자</span></div>"
-        st.markdown(brand, unsafe_allow_html=True, width="content")
-        if admin_dashboard:
+        is_admin = bool(auth and auth.get("role") == "admin")
+        st.markdown(_brand_html(admin=is_admin), unsafe_allow_html=True, width="content")
+        if auth and page is not None:
             with st.container(
-                key="manager_header_actions", horizontal=True, wrap=False, width="content",
+                key="top_nav", horizontal=True, wrap=False, width="content", gap=None,
                 vertical_alignment="center",
             ):
-                if st.button("회사 설정", key="open_manager_settings"):
-                    st.session_state.manager_settings = True
-                    st.rerun()
-                if st.button("← 뒤로가기", key="leave_admin_dashboard"):
-                    st.session_state.admin_view = "home"
-                    st.rerun()
-        elif logout:
-            with st.container(horizontal=True, width="content", vertical_alignment="center"):
+                for key, label, _, _ in _nav_for(auth):
+                    st.button(
+                        label, key=f"nav_{key}", type="primary" if key == page else "tertiary",
+                        on_click=_go_page, args=(key,),
+                    )
+        if auth or logout:
+            with st.container(
+                key="header_user", horizontal=True, wrap=False, width="content",
+                vertical_alignment="center", gap="small",
+            ):
+                if auth:
+                    who = "관리자" if is_admin else f"{auth.get('name') or ''}님"
+                    st.markdown(
+                        f"<span class='header-user'>{_escape(who)}</span>",
+                        unsafe_allow_html=True, width="content",
+                    )
                 st.button("로그아웃", key="logout_button", on_click=_on_logout_click)
+
+
+def _render_bottom_tabs(auth: dict, page: str) -> None:
+    """모바일(768px 미만) 하단 고정 탭바. PC에서는 CSS로 숨긴다."""
+    with st.container(key="bottom_tabs", horizontal=True, wrap=False, gap=None):
+        for key, label, short, icon in _nav_for(auth):
+            st.button(
+                short, key=f"tab_{key}", icon=icon, help=label,
+                type="primary" if key == page else "tertiary",
+                on_click=_go_page, args=(key,), width="stretch",
+            )
+
+
+def _page_heading(title: str, subtitle: str = "") -> None:
+    sub = f"<p>{_escape(subtitle)}</p>" if subtitle else ""
+    st.markdown(
+        f"<div class='page-heading'><h1>{_escape(title)}</h1>{sub}</div>",
+        unsafe_allow_html=True,
+    )
+    notice = st.session_state.pop("manager_success", "")
+    if notice:
+        st.success(notice)
+
+
+def _render_app(agent: OfficeGenieAgent, auth: dict, page: str) -> None:
+    is_admin = auth.get("role") == "admin"
+    pages = ADMIN_PAGES if is_admin else EMPLOYEE_PAGES
+    if not is_admin:
+        dashboard_identity = (auth["company_id"], auth["employee_id"])
+        if st.session_state.get("dashboard_identity") != dashboard_identity:
+            st.session_state.dashboard_identity = dashboard_identity
+            _new_chat_state(auth["company_id"], auth["employee_id"], False)
+    with st.container(key="dashboard_root", gap=None):
+        _render_site_header(auth=auth, page=page)
+        with st.container(key="page_main", gap=None):
+            notice = st.session_state.pop("page_notice", "")
+            if notice:
+                st.warning(notice)
+            pages[page](agent, auth)
+        _render_bottom_tabs(auth, page)
+    if not is_admin:
+        _render_chat_launcher(auth)
+
+
+def _render_chat_launcher(auth: dict) -> None:
+    company_id, employee_id = auth["company_id"], auth["employee_id"]
+    with st.container(key="chat_fab"):
+        st.button(
+            "챗봇 닫기" if st.session_state.get("chat_panel_open") else "챗봇 열기",
+            key="chat_fab_toggle",
+            on_click=_toggle_chat_panel,
+            args=(company_id, employee_id),
+        )
+    if st.session_state.get("chat_panel_open"):
+        _render_chat_panel(company_id, employee_id)
 
 
 def _render_landing() -> None:
@@ -2170,7 +2510,11 @@ def _render_login() -> None:
             result = {"ok": False, "message": CONNECTION_ERROR}
         if result.get("ok"):
             try:
-                state.login_success = (_auth_from_login(result["data"]), time.monotonic())
+                state.login_success = (
+                    _auth_from_login(result["data"]),
+                    result["data"].get("session_token") or "",
+                    time.monotonic(),
+                )
             except (KeyError, TypeError) as exc:
                 _log_post_login_failure("login_response", exc, None)
                 state.login_error = POST_LOGIN_ERROR
@@ -2180,13 +2524,18 @@ def _render_login() -> None:
         state.login_clear_password = True
         st.rerun()
     if success is not None:
-        auth, confirmed_at = success
+        auth, token, confirmed_at = success
         time.sleep(max(0, 0.8 - (time.monotonic() - confirmed_at)))
         for key in list(state.keys()):
             del state[key]
         state.auth = auth
-        if auth["role"] == "admin":
-            state.admin_view = "home"
+        state.resume_checked = True
+        if st.query_params.get("view") == "login":
+            del st.query_params["view"]
+        if token:
+            state.session_token = token
+            state.session_checked_at = time.monotonic()
+            state.cookie_action = ("set", token)
         _touch_activity()
         st.rerun()
 
@@ -2232,54 +2581,13 @@ def _render_change_password_card(auth: dict, minimum: int) -> None:
                 return
             auth["must_change"] = False
             st.session_state.auth = auth
+            # 비밀번호를 바꾸면 기존 세션이 모두 폐기되므로 새 토큰으로 쿠키를 바꾼다.
+            token = (result.get("data") or {}).get("session_token")
+            if token:
+                st.session_state.session_token = token
+                st.session_state.session_checked_at = time.monotonic()
+                st.session_state.cookie_action = ("set", token)
             st.rerun()
-
-
-def _render_employee(agent: OfficeGenieAgent, auth: dict) -> None:
-    company_id = auth["company_id"]
-    employee_id = auth["employee_id"]
-
-    dashboard_identity = (company_id, employee_id)
-    if st.session_state.get("dashboard_identity") != dashboard_identity:
-        st.session_state.dashboard_identity = dashboard_identity
-        _new_chat_state(company_id, employee_id, False)
-
-    fallback_employee = {
-        "employee_id": employee_id,
-        "name": auth.get("name"),
-        "department": auth.get("department"),
-        "position": auth.get("position"),
-    }
-    with st.container(key="dashboard_root", gap=None):
-        _render_site_header(logout=True)
-        with st.container(key="employee_read_status", gap=None):
-            with st.spinner("온보딩 정보를 불러오는 중입니다."):
-                sidebar_result = agent.get_sidebar(company_id, employee_id)
-            if sidebar_result.get("code") == "INVALID_SESSION":
-                _logout(sidebar_result.get("message", ""))
-                st.rerun()
-            if not sidebar_result.get("ok"):
-                _read_error(sidebar_result.get("message"), "employee_sidebar")
-
-        sidebar_ok = sidebar_result.get("ok")
-        sidebar_data = (sidebar_result.get("data") or {}) if sidebar_ok else {}
-        dashboard_employee = sidebar_data.get("employee", fallback_employee)
-        tickets = sidebar_data.get("tickets", []) if sidebar_ok else None
-        announcements = sidebar_data.get("announcements")
-        annual_leave = sidebar_data.get("annual_leave")
-        remaining_leave = annual_leave.get("remaining_days") if isinstance(annual_leave, dict) else None
-        _render_dashboard(dashboard_employee, tickets, remaining_leave, announcements)
-
-    with st.container(key="chat_fab"):
-        st.button(
-            "챗봇 닫기" if st.session_state.get("chat_panel_open") else "챗봇 열기",
-            key="chat_fab_toggle",
-            on_click=_toggle_chat_panel,
-            args=(company_id, employee_id),
-        )
-
-    if st.session_state.get("chat_panel_open"):
-        _render_chat_panel(company_id, employee_id)
 
 
 # ---------------------------------------------------------------------------
@@ -2307,36 +2615,6 @@ def _admin_read(agent: OfficeGenieAgent, auth: dict, name: str, **args) -> dict 
         return result["data"]
     _read_error(result.get("message"), name)
     return None
-
-
-def _open_admin_dashboard() -> None:
-    auth = st.session_state.get("auth") or {}
-    if auth.get("role") == "admin" and not auth.get("must_change"):
-        st.session_state.admin_view = "dashboard"
-        st.session_state.manager_tabs = "사원 관리"
-
-
-def _render_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
-    profile = {"name": "관리자", "department": auth["company_name"], "position": auth["account_id"]}
-    with st.container(key="dashboard_root", gap=None):
-        _render_site_header(logout=True)
-        with st.container(key="admin_home_main", gap=None):
-            st.markdown(
-                _onboarding_welcome("관리자", "회사 소식을 확인하고 관리자 화면에서 업무를 관리하세요."),
-                unsafe_allow_html=True,
-            )
-            with st.container(key="admin_home_profile", gap=None):
-                st.markdown(_onboarding_profile(profile, None), unsafe_allow_html=True)
-                with st.container(key="admin_home_action", width="content"):
-                    st.button("관리자 화면 →", key="open_admin_dashboard", on_click=_open_admin_dashboard)
-            data = _admin_read(agent, auth, "ui_admin_list_announcements")
-            announcements = [notice for notice in data["announcements"] if notice["is_public"]] if data else None
-            st.markdown(
-                _onboarding_cards(None, announcements, equipment_unavailable="연결된 사원 정보가 없습니다."),
-                unsafe_allow_html=True,
-            )
-    with st.container(key="chat_fab"):
-        st.button("챗봇 열기", key="admin_home_chat", disabled=True)
 
 
 def _short_time(value: object) -> str:
@@ -2892,39 +3170,12 @@ def _admin_accounts_tab(agent: OfficeGenieAgent, auth: dict) -> None:
         else:
             changed = agent.change_password(auth["company_id"], auth["account_id"], old, new)
             (st.success if changed.get("ok") else st.error)(changed.get("message", ""))
-
-
-def _render_admin_settings(agent: OfficeGenieAgent, auth: dict) -> None:
-    with st.container(key="admin_root"):
-        with st.container(key="settings_heading", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-            st.markdown("<h1>회사 설정</h1>", unsafe_allow_html=True, width="content")
-            if st.button("← 관리자 대시보드", key="leave_manager_settings"):
-                st.session_state.manager_settings = False
-                st.rerun()
-        company_info = st.container(gap=None)
-        data_tab, employees_tab, tickets_tab, accounts_tab = st.tabs(
-            ["자료 업로드", "사원 상세", "신청 이력 관리", "계정"], key="settings_tabs",
-        )
-        with company_info:
-            info = _admin_read(agent, auth, "ui_admin_overview")
-            if info is None:
-                return
-            with st.container(key="settings_code_card", gap=None):
-                st.markdown(
-                    "<div class='company-code-label'><strong>회사 코드</strong>사원들에게 알려주세요</div>"
-                    f"<div class='company-code-big'>{_escape(info['company_code'])}</div>",
-                    unsafe_allow_html=True,
-                )
-                _company_code_copy(data={"code": info["company_code"]}, key="settings_company_code")
-        with data_tab:
-            with st.container(key="settings_data"):
-                _admin_data_tab(agent, auth, info)
-        with employees_tab:
-            _admin_employees_tab(agent, auth)
-        with tickets_tab:
-            _admin_tickets_tab(agent, auth)
-        with accounts_tab:
-            _admin_accounts_tab(agent, auth)
+            token = (changed.get("data") or {}).get("session_token") if changed.get("ok") else None
+            if token:
+                st.session_state.session_token = token
+                st.session_state.session_checked_at = time.monotonic()
+                st.session_state.cookie_action = ("set", token)
+                _apply_cookie_action()
 
 
 def _manager_select(section: str, mode: str | None, row_id: str | None = None) -> None:
@@ -3369,34 +3620,152 @@ def _manager_policies(agent: OfficeGenieAgent, auth: dict) -> None:
     )
 
 
-def _render_admin(agent: OfficeGenieAgent, auth: dict) -> None:
-    with st.container(key="manager_dashboard", gap=None):
-        _render_site_header(admin_dashboard=True)
-        with st.container(key="manager_main"):
-            notice = st.session_state.pop("manager_success", "")
-            with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-                st.markdown(
-                    "<div class='manager-heading'><h1>관리자 대시보드</h1></div>"
-                    "<p class='manager-subtitle'>우리 회사의 구성원과 사내 정보를 한곳에서 관리하세요.</p>",
-                    unsafe_allow_html=True, width="content",
-                )
-                if notice:
-                    st.success(notice)
-            labels = ["사원 관리", "비품 관리", "공지사항 관리", "데이터 관리"]
-            sections = [
-                ("employees", _manager_employees), ("equipment", _manager_equipment),
-                ("notices", _manager_notices), ("policies", _manager_policies),
-            ]
-            tabs = st.tabs(labels, key="manager_tabs", on_change="rerun")
-            for tab, (section, render) in zip(tabs, sections):
-                if tab.open:
-                    with tab:
-                        with st.container(key="manager_card"):
-                            selection = st.session_state.get(f"manager_{section}_selection", (None, None))
-                            with _view_container(selection, f"_manager_{section}_slot"):
-                                if section == "policies" and not selection[0]:
-                                    _manager_heading("사내 규정", "챗봇이 답변에 참고하는 사내 규정 원문을 확인할 수 있습니다.")
-                                render(agent, auth)
+# ---------------------------------------------------------------------------
+# 사원 메뉴
+# ---------------------------------------------------------------------------
+
+
+def _employee_sidebar(agent: OfficeGenieAgent, auth: dict) -> dict | None:
+    """본인 연차·신청·공지. 세션이 무효하면 로그아웃한다. 실패하면 None."""
+    with st.container(key="employee_read_status", gap=None):
+        with st.spinner("정보를 불러오는 중입니다."):
+            result = agent.get_sidebar(auth["company_id"], auth["employee_id"])
+        if result.get("code") == "INVALID_SESSION":
+            _logout(result.get("message", ""))
+            st.rerun()
+        if not result.get("ok"):
+            _read_error(result.get("message"), "employee_sidebar")
+            return None
+    return result.get("data") or {}
+
+
+def _page_employee_home(agent: OfficeGenieAgent, auth: dict) -> None:
+    data = _employee_sidebar(agent, auth)
+    fallback_employee = {
+        "employee_id": auth["employee_id"],
+        "name": auth.get("name"),
+        "department": auth.get("department"),
+        "position": auth.get("position"),
+    }
+    data_ok = data is not None
+    data = data or {}
+    annual_leave = data.get("annual_leave")
+    remaining_leave = annual_leave.get("remaining_days") if isinstance(annual_leave, dict) else None
+    _render_dashboard(
+        data.get("employee", fallback_employee),
+        data.get("tickets", []) if data_ok else None,
+        remaining_leave,
+        data.get("announcements"),
+    )
+
+
+def _page_employee_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("공지사항", "회사 소식을 확인하세요.")
+    data = _employee_sidebar(agent, auth)
+    announcements = data.get("announcements") if data is not None else None
+    st.markdown(_onboarding_cards([], announcements), unsafe_allow_html=True)
+
+
+def _page_employee_library(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("자료실", "회사 규정과 부서 자료를 한곳에서 찾아보세요.")
+    st.info("자료실을 준비하고 있습니다.")
+
+
+def _page_employee_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("비품 신청", "필요한 비품을 신청하고 진행 상황을 확인하세요.")
+    data = _employee_sidebar(agent, auth)
+    tickets = data.get("tickets", []) if data is not None else None
+    st.markdown(_onboarding_cards(tickets, []), unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# 관리자 메뉴. 모든 호출은 agent.admin_call로 가고, 서버가 관리자 여부를 다시 확인한다.
+# ---------------------------------------------------------------------------
+
+
+def _admin_section_tabs(key: str, sections: list[tuple[str, str, object]]) -> None:
+    """관리자 메뉴 안의 하위 탭. 선택한 탭만 그린다."""
+    tabs = st.tabs([label for label, _, _ in sections], key=key, on_change="rerun")
+    for tab, (_, section, render) in zip(tabs, sections):
+        if tab.open:
+            with tab:
+                with st.container(key="manager_card"):
+                    selection = st.session_state.get(f"manager_{section}_selection", (None, None))
+                    with _view_container(selection, f"_manager_{section}_slot"):
+                        render()
+
+
+def _page_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
+    profile = {"name": "관리자", "department": auth["company_name"], "position": auth["account_id"]}
+    st.markdown(
+        _onboarding_welcome("관리자", "회사 소식을 확인하고 위 메뉴에서 업무를 관리하세요."),
+        unsafe_allow_html=True,
+    )
+    st.markdown(_onboarding_profile(profile, None), unsafe_allow_html=True)
+    data = _admin_read(agent, auth, "ui_admin_list_announcements")
+    announcements = [notice for notice in data["announcements"] if notice["is_public"]] if data else None
+    st.markdown(
+        _onboarding_cards(None, announcements, equipment_unavailable="연결된 사원 정보가 없습니다."),
+        unsafe_allow_html=True,
+    )
+
+
+def _page_admin_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("공지사항 관리", "사원에게 전달할 소식을 작성하고 공개 여부를 관리하세요.")
+    with st.container(key="manager_card"):
+        selection = st.session_state.get("manager_notices_selection", (None, None))
+        with _view_container(selection, "_manager_notices_slot"):
+            _manager_notices(agent, auth)
+
+
+def _page_admin_library(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("자료실 관리", "사원에게 공유할 파일과 링크를 관리하세요.")
+    st.info("자료실을 준비하고 있습니다.")
+
+
+def _page_admin_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("비품 관리", "사원이 신청한 비품의 지급 상태와 처리 이력을 관리하세요.")
+    _admin_section_tabs("equipment_tabs", [
+        ("비품 지급", "equipment", lambda: _manager_equipment(agent, auth)),
+        ("신청 상태·이력", "tickets", lambda: _admin_tickets_tab(agent, auth)),
+    ])
+
+
+def _page_admin_employees(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("사원", "회사에 소속된 사원 정보를 확인하고 관리하세요.")
+    _admin_section_tabs("employees_tabs", [
+        ("사원 목록", "employees", lambda: _manager_employees(agent, auth)),
+        ("사원 상세", "employee_detail", lambda: _admin_employees_tab(agent, auth)),
+    ])
+
+
+def _page_admin_data(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("데이터·계정", "회사 데이터를 올리고 규정 원문과 계정을 관리하세요.")
+    info = _admin_read(agent, auth, "ui_admin_overview")
+    if info is None:
+        return
+    with st.container(key="settings_code_card", gap=None):
+        st.markdown(
+            "<div class='company-code-label'><strong>회사 코드</strong>사원들에게 알려주세요</div>"
+            f"<div class='company-code-big'>{_escape(info['company_code'])}</div>",
+            unsafe_allow_html=True,
+        )
+        _company_code_copy(data={"code": info["company_code"]}, key="settings_company_code")
+
+    def policies() -> None:
+        if not st.session_state.get("manager_policies_selection", (None, None))[0]:
+            _manager_heading("사내 규정", "챗봇이 답변에 참고하는 사내 규정 원문을 확인할 수 있습니다.")
+        _manager_policies(agent, auth)
+
+    def upload() -> None:
+        with st.container(key="settings_data"):
+            _admin_data_tab(agent, auth, info)
+
+    _admin_section_tabs("data_tabs", [
+        ("자료 업로드", "upload", upload),
+        ("사내 규정", "policies", policies),
+        ("계정", "accounts", lambda: _admin_accounts_tab(agent, auth)),
+    ])
 
 
 def _current_view(auth: dict | None) -> str:
@@ -3405,11 +3774,7 @@ def _current_view(auth: dict | None) -> str:
         return st.session_state.get("auth_view", entry_view)
     if auth.get("must_change"):
         return "change_password"
-    if auth.get("role") != "admin":
-        return "employee"
-    if st.session_state.get("admin_view") != "dashboard":
-        return "admin_home"
-    return "settings" if st.session_state.get("manager_settings") else "admin_dashboard"
+    return "app"
 
 
 def _view_container(view: str | tuple, state_key: str = "_screen_slot"):
@@ -3429,7 +3794,7 @@ def _view_container(view: str | tuple, state_key: str = "_screen_slot"):
     return screen
 
 
-def _render_view(view: str, auth: dict | None) -> None:
+def _render_view(view: str, auth: dict | None, page: str | None = None, denied: str | None = None) -> None:
     if not auth:
         if view == "register":
             _render_register()
@@ -3450,16 +3815,15 @@ def _render_view(view: str, auth: dict | None) -> None:
 
         with st.container(key="db_screen"):
             agent = get_agent()
-            if view == "settings":
-                with st.container(key="company_settings", gap=None):
-                    _render_site_header(logout=True)
-                    _render_admin_settings(agent, auth)
-            elif view == "admin_dashboard":
-                _render_admin(agent, auth)
-            elif view == "admin_home":
-                _render_admin_home(agent, auth)
-            else:
-                _render_employee(agent, auth)
+            if not _session_still_valid(agent):
+                _logout("로그인 정보가 변경되어 다시 로그인이 필요합니다.")
+                st.rerun()
+            if denied and auth.get("role") != "admin":
+                agent.employee_call(
+                    "ui_record_page_denied", auth["company_id"], auth["employee_id"], page=denied,
+                )
+                st.session_state.page_notice = PAGE_DENIED_NOTICE
+            _render_app(agent, auth, page or "home")
     except (RerunException, StopException):
         raise
     except Exception as exc:
@@ -3468,15 +3832,37 @@ def _render_view(view: str, auth: dict | None) -> None:
         _render_post_login_error()
 
 
+EMPLOYEE_PAGES = {
+    "home": _page_employee_home,
+    "notices": _page_employee_notices,
+    "library": _page_employee_library,
+    "equipment": _page_employee_equipment,
+}
+ADMIN_PAGES = {
+    "home": _page_admin_home,
+    "notices": _page_admin_notices,
+    "library": _page_admin_library,
+    "equipment": _page_admin_equipment,
+    "employees": _page_admin_employees,
+    "data": _page_admin_data,
+}
+
+
 def main() -> None:
     _render_styles()
+    _render_shell_styles()
+    _restore_login()
     if _session_expired():
         _logout("30분 동안 사용하지 않아 로그아웃되었습니다. 다시 로그인해 주세요.")
+    _apply_cookie_action()
 
     auth = st.session_state.get("auth")
     view = _current_view(auth)
-    with _view_container(view):
-        _render_view(view, auth)
+    page = denied = None
+    if view == "app":
+        page, denied = _resolve_page(auth)
+    with _view_container(f"app:{page}" if page else view):
+        _render_view(view, auth, page, denied)
 
 
 main()

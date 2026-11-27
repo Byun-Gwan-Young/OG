@@ -124,6 +124,7 @@ def test_login_employee_success_ignores_code_case_and_spaces():
     assert set(data) == {
         "company_id", "company_name", "role", "employee_id", "name",
         "department", "position", "must_change",
+        "session_token",  # 새로고침 후 로그인 유지용 무작위 토큰(DB에는 해시만)
     }
 
 
@@ -347,6 +348,7 @@ def test_admin_password_script_and_admin_login(capsys):
     r = s.ui_login(_code(A), " admin ", "admin-pass-1")
     assert r["ok"]
     assert r["data"] == {
+        "session_token": r["data"]["session_token"],
         "company_id": A, "company_name": r["data"]["company_name"], "role": "admin",
         "account_id": "ADMIN", "must_change": False,
     }

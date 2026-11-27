@@ -255,6 +255,19 @@ audit_log = Table(
     Column("detail", JSON, nullable=False, default=dict),
 )
 
+# 새로고침해도 로그인을 유지하는 서버 세션. 브라우저 쿠키에는 무작위 토큰만 두고,
+# DB에는 그 SHA-256 해시만 저장한다. 신원·역할은 매번 accounts에서 다시 확인한다.
+login_sessions = Table(
+    "login_sessions",
+    metadata,
+    Column("token_hash", String(64), primary_key=True),
+    Column("company_id", String(100), nullable=False, index=True),
+    Column("account_id", String(100), nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("last_seen_at", String(40), nullable=False),
+    Column("expires_at", String(40), nullable=False),
+)
+
 _STATIC_TABLES = (
     policies,
     employees,
@@ -2100,6 +2113,7 @@ def change_password(
             )
         )
         _audit(conn, company_id, account_id, "password_changed", account_id)
+        _revoke_account_sessions(conn, company_id, account_id)
         return "ok"
 
     return _run_db(operation, write=True, immediate=True)
@@ -2294,6 +2308,111 @@ def record_admin_view(
             _audit(conn, company_id, actor, action, target)
 
     _run_db(operation, write=True)
+
+
+# ---------------------------------------------------------------------------
+# 로그인 세션 (새로고침 후 로그인 유지)
+# ---------------------------------------------------------------------------
+
+SESSION_IDLE_SECONDS = 30 * 60  # 30분 무동작이면 만료(화면의 자동 로그아웃과 같은 기준)
+SESSION_MAX_SECONDS = 12 * 60 * 60  # 로그인 후 최대 12시간
+SESSION_TOUCH_SECONDS = 60  # 마지막 사용 시각은 1분에 한 번만 갱신한다
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def create_login_session(company_id: str, account_id: str) -> str:
+    """새 세션 토큰을 만든다. 원문은 호출한 쪽에 한 번만 돌려주고 DB에는 해시만 남긴다."""
+    token = secrets.token_urlsafe(32)
+    now = _utc_now()
+
+    def operation(conn: Connection) -> None:
+        # 만료된 세션은 이때 같이 정리한다.
+        conn.execute(delete(login_sessions).where(login_sessions.c.expires_at < _iso(now)))
+        conn.execute(
+            insert(login_sessions).values(
+                token_hash=_token_hash(token),
+                company_id=company_id,
+                account_id=account_id,
+                created_at=_iso(now),
+                last_seen_at=_iso(now),
+                expires_at=_iso(now + timedelta(seconds=SESSION_MAX_SECONDS)),
+            )
+        )
+
+    _run_db(operation, write=True)
+    return token
+
+
+def resume_login_session(token: str) -> dict | None:
+    """토큰이 유효하면 {"company_id", "account_id", "role", "must_change"}를 돌려준다.
+
+    만료·잠금·비활성 계정·모르는 토큰은 모두 None. 무효 토큰은 지운다.
+    """
+    token = str(token or "")
+    if not token or len(token) > 200:
+        return None
+    now = _utc_now()
+
+    def operation(conn: Connection) -> dict | None:
+        key = login_sessions.c.token_hash == _token_hash(token)
+        row = conn.execute(select(login_sessions).where(key)).mappings().first()
+        if row is None:
+            return None
+        expires = _parse_iso(row["expires_at"])
+        last_seen = _parse_iso(row["last_seen_at"])
+        account = conn.execute(
+            select(accounts).where(_account_key(row["company_id"], row["account_id"]))
+        ).mappings().first()
+        if (
+            expires is None
+            or expires <= now
+            or last_seen is None
+            or (now - last_seen).total_seconds() > SESSION_IDLE_SECONDS
+            or account is None
+            or _account_status(dict(account), now) in ("disabled", "locked")
+        ):
+            conn.execute(delete(login_sessions).where(key))
+            return None
+        if (now - last_seen).total_seconds() >= SESSION_TOUCH_SECONDS:
+            conn.execute(update(login_sessions).where(key).values(last_seen_at=_iso(now)))
+        return {
+            "company_id": row["company_id"],
+            "account_id": row["account_id"],
+            "role": account["role"],
+            "must_change": bool(account["must_change"]),
+        }
+
+    return _run_db(operation, write=True)
+
+
+def revoke_login_session(token: str) -> None:
+    token = str(token or "")
+    if not token:
+        return
+    _run_db(
+        lambda conn: conn.execute(
+            delete(login_sessions).where(login_sessions.c.token_hash == _token_hash(token))
+        ),
+        write=True,
+    )
+
+
+def _revoke_account_sessions(conn: Connection, company_id: str, account_id: str) -> None:
+    conn.execute(
+        delete(login_sessions).where(
+            and_(
+                login_sessions.c.company_id == company_id,
+                login_sessions.c.account_id == account_id,
+            )
+        )
+    )
+
+
+def revoke_account_sessions(company_id: str, account_id: str) -> None:
+    _run_db(lambda conn: _revoke_account_sessions(conn, company_id, account_id), write=True)
 
 
 def company_overview(company_id: str) -> dict | None:
@@ -2701,6 +2820,7 @@ def admin_reset_password(company_id: str, employee_id: str, actor: str) -> str |
             )
         )
         _audit(conn, company_id, actor, "password_reset", employee_id)
+        _revoke_account_sessions(conn, company_id, employee_id)
         return password
 
     return _run_db(operation, write=True, immediate=True)
@@ -2783,7 +2903,7 @@ def clear_tables_for_tests() -> None:
         raise RuntimeError("테스트 환경에서만 사용할 수 있습니다.")
 
     def operation(conn: Connection) -> None:
-        for table in (audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
+        for table in (login_sessions, audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
             conn.execute(delete(table))
 
     _run_db(operation, write=True)
@@ -2795,7 +2915,7 @@ def clear_tables_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 # 테스트가 흔히 바꾸는 표. 회사 정적 데이터(규정·사원 등)는 data_version으로 변경을 감지한다.
-_BASELINE_TABLES = (tickets, announcements, accounts, audit_log)
+_BASELINE_TABLES = (tickets, announcements, accounts, audit_log, login_sessions)
 
 
 def _require_testing() -> None:

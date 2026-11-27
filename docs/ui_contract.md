@@ -63,6 +63,27 @@ agent.register_company(company_name, admin_password, signup_code="")
 st.session_state.chat = agent.new_session(auth["company_id"], auth["employee_id"])
 ```
 
+### 2-1-1. 새로고침 후 로그인 유지 · 메뉴 주소
+
+```python
+# 로그인 성공 응답 data에 session_token(무작위 43자)이 추가된다. DB에는 SHA-256 해시만 저장.
+agent.resume_session(session_token)
+# → 성공 시 agent.login과 같은 data(session_token 제외). 신원·역할은 서버가 accounts에서 다시 정한다.
+# → 모르는 토큰·30분 무동작·발급 후 12시간 경과·잠금·비활성 계정: {"ok": False, "code": "INVALID_SESSION"}
+agent.logout(session_token)          # 서버에서 토큰 폐기 → {"ok": True, "code": "LOGGED_OUT"}
+agent.change_password(...)           # 성공 시 data = {"session_token": 새 토큰}. 이 계정의 기존 세션은 모두 폐기
+agent.employee_call("ui_record_page_denied", company_id, employee_id, page="data")
+# → 사원이 관리자 메뉴 주소(?page=employees|data)로 들어왔을 때 감사 로그(page_denied)를 남긴다.
+```
+
+- app.py는 토큰을 `og_session` 쿠키(SameSite=Strict, HTTPS면 Secure, 12시간)에만 둔다.
+  새로고침하면 `st.context.cookies`로 읽어 `resume_session`으로 복원한다. 토큰은 `auth`에 넣지 않는다.
+- 관리자가 비밀번호를 초기화하거나 계정을 비활성화하면 그 사원의 세션은 폐기된다
+  (열려 있는 화면은 5분 안의 다음 확인 때 로그아웃).
+- 메뉴는 URL `?page=`와 동기화한다. 사원: `home|notices|library|equipment`,
+  관리자: 위 4개 + `employees|data`. 목록에 없는 값은 홈으로 보낸다. page 값은 신원·권한을 바꾸지 않는다.
+- `employee_call`은 `ui_`로 시작하고 `ui_admin_`이 아닌 툴만 부른다. company_id·employee_id는 세션 값으로 채운다.
+
 ### 2-2. 우측 사이드바 (잔여 연차 + 신청 현황판)
 
 ```python

@@ -434,6 +434,21 @@ class OfficeGenieAgent:
             {"company_id": company_id, "actor_account_id": actor_account_id, **args},
         )
 
+    def employee_call(self, name: str, company_id: str, employee_id: str, **args) -> dict:
+        """사원 화면용 ui_ 툴 공통 호출. 신원은 로그인 세션 값으로만 채운다."""
+        if not name.startswith("ui_") or name.startswith("ui_admin_"):
+            raise ValueError("사원 화면용 툴 이름이 아닙니다.")
+        return self.call_tool(
+            name, {"company_id": company_id, "employee_id": employee_id, **args}
+        )
+
+    def resume_session(self, session_token: str) -> dict:
+        """브라우저 쿠키의 세션 토큰으로 로그인 상태를 복원한다(새로고침 대응)."""
+        return self.call_tool("ui_resume_session", {"session_token": session_token or ""})
+
+    def logout(self, session_token: str) -> dict:
+        return self.call_tool("ui_logout", {"session_token": session_token or ""})
+
     def signup_settings(self) -> dict:
         return self.call_tool("ui_signup_settings")
 

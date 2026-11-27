@@ -41,6 +41,15 @@ def _login(at: AppTest, code: str, account_id: str, password: str) -> AppTest:
     return at.run()
 
 
+def _goto(at: AppTest, page: str) -> AppTest:
+    """메뉴 버튼(상단 메뉴)으로 이동한다."""
+    at.button(key=f"nav_{page}").click()
+    at.run()
+    assert not at.exception
+    assert at.query_params["page"] == [page] or at.query_params["page"] == page
+    return at
+
+
 def _new_app(entry: str = "로그인") -> AppTest:
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
@@ -88,12 +97,11 @@ def test_login_shows_own_dashboard_then_logout_clears_session():
     assert "나의 온보딩" in page and D.employee("bridgesoft", "EMP001")["name"] in page
     assert "백엔드개발팀" in page
     assert at.session_state["auth"]["employee_id"] == "EMP001"
-    assert not any(b.key == "open_admin_dashboard" for b in at.button)
-    at.session_state["admin_view"] = "dashboard"
+    assert not any(b.key == "nav_employees" for b in at.button)
+    at.query_params["page"] = "employees"  # 사원이 관리자 메뉴 주소를 직접 입력
     at.run()
     assert "나의 온보딩" in _all_markdown(at)
-    assert "관리자 대시보드" not in _all_markdown(at)
-    assert not any(b.key == "open_admin_dashboard" for b in at.button)
+    assert not any(b.key == "nav_employees" for b in at.button)
 
     _button(at, "로그아웃").click()
     at.run()
@@ -211,16 +219,11 @@ def test_register_company_then_login_as_admin(monkeypatch):
     assert not at.exception
     assert at.session_state["auth"]["role"] == "admin"
     page = _all_markdown(at)
-    assert "나의 온보딩" in page and "에이티상사" in page
-    assert "관리자 대시보드" not in page
-    assert at.session_state["admin_view"] == "home"
+    assert "에이티상사" in page
     auth = dict(at.session_state["auth"])
-    at.button(key="open_admin_dashboard").click().run()
+    _goto(at, "employees")
     assert at.session_state["auth"] == auth
-    assert at.session_state["manager_tabs"] == "사원 관리"
-    assert "관리자 대시보드" in _all_markdown(at)
-    _button(at, "회사 설정").click()
-    at.run()
+    _goto(at, "data")
     assert code in _all_markdown(at)
     assert any("아직 회사 데이터가 없습니다" in i.value for i in at.info)
     assert "나의 온보딩" not in _all_markdown(at)
@@ -231,8 +234,7 @@ def _admin_app(company_code: str, password: str) -> AppTest:
     at = _login(at, company_code, "ADMIN", password)
     assert not at.exception
     assert at.session_state["auth"]["role"] == "admin"
-    assert at.button(key="open_admin_dashboard")
-    at.button(key="open_admin_dashboard").click().run()
+    assert at.button(key="nav_data")
     return at
 
 
@@ -253,8 +255,7 @@ def test_admin_uploads_policy_preview_then_apply(monkeypatch):
     assert company["company_code"] in _all_markdown(at)
 
     at = _admin_app(company["company_code"], "admin-pass-1")
-    _button(at, "회사 설정").click()
-    at.run()
+    _goto(at, "data")
     content = (ROOT / "data" / "bridgesoft" / "policies.json").read_text("utf-8")
     at.session_state["admin_upload_files"] = [{"name": "policies.json", "content": content}]
     at.run()
@@ -282,7 +283,8 @@ def test_admin_approves_ticket_and_employee_sees_scheduled():
         if t["employee_id"] == "EMP001" and t["status"] == "접수완료" and t["type"] == "비품"
     )
     at = _admin_app(code, "admin-pass-1")
-    _button(at, "회사 설정").click()
+    _goto(at, "equipment")
+    at.session_state["equipment_tabs"] = "신청 상태·이력"
     at.run()
     for step in ("검토중", "승인"):
         at.selectbox(key="admin_ticket_pick").set_value(target["ticket_id"])
@@ -307,28 +309,34 @@ def _demo_admin() -> tuple[AppTest, str]:
     return _admin_app(code, "admin-pass-1"), code
 
 
+# 예전 관리자 탭 이름 → (메뉴, 하위 탭 key, 하위 탭 이름)
+_MANAGER_TABS = {
+    "사원 관리": ("employees", "employees_tabs", "사원 목록"),
+    "비품 관리": ("equipment", "equipment_tabs", "비품 지급"),
+    "공지사항 관리": ("notices", None, None),
+    "데이터 관리": ("data", "data_tabs", "사내 규정"),
+}
+
+
 def _manager_tab(at: AppTest, label: str) -> None:
-    at.session_state["manager_tabs"] = label
-    at.run()
+    page, tabs_key, tab = _MANAGER_TABS[label]
+    _goto(at, page)
+    if tabs_key:
+        at.session_state[tabs_key] = tab
+        at.run()
     assert not at.exception
 
 
 def test_manager_header_navigation_preserves_admin_session():
     at, code = _demo_admin()
     auth = at.session_state["auth"].copy()
-    for label in ("사원 관리", "비품 관리", "공지사항 관리", "데이터 관리"):
-        _manager_tab(at, label)
-        assert _button(at, "회사 설정")
-        assert _button(at, "← 뒤로가기")
-
-    _button(at, "회사 설정").click().run()
+    for page in ("notices", "library", "equipment", "employees", "data", "home"):
+        _goto(at, page)
+        assert at.button(key=f"nav_{page}").proto.type == "primary"
+        assert at.button(key=f"tab_{page}")  # 모바일 하단 탭에도 같은 메뉴
+        assert _button(at, "로그아웃")
+    _goto(at, "data")
     assert code in _all_markdown(at)
-    _button(at, "← 관리자 대시보드").click().run()
-    assert "관리자 대시보드" in _all_markdown(at)
-
-    _button(at, "← 뒤로가기").click().run()
-    assert at.session_state["admin_view"] == "home"
-    assert at.button(key="open_admin_dashboard")
     assert at.session_state["auth"] == auth
     assert not at.exception
 
@@ -336,6 +344,7 @@ def test_manager_header_navigation_preserves_admin_session():
 @pytest.mark.reimport
 def test_manager_adds_and_edits_employee_preserving_company_scope():
     at, _ = _demo_admin()
+    _manager_tab(at, "사원 관리")
     original = storage.admin_list_employees("bridgesoft")
     other = storage.get_employee("nextwave", "EMP001")
     _button(at, "＋ 사원 추가").click().run()
@@ -389,7 +398,6 @@ def test_manager_equipment_date_and_announcement_visibility_in_employee_dashboar
     at.text_area(key="manager_notice_body").input("1. 첫 줄\n\n2. 둘째 줄")
     _button(at, "저장").click().run()
     notice = storage.list_announcements("bridgesoft")[0]
-    _button(at, "← 뒤로가기").click().run()
     _button(at, "로그아웃").click().run()
     _login(at, code, "EMP001", _password("bridgesoft", "EMP001"))
     page = _all_markdown(at)
@@ -399,13 +407,11 @@ def test_manager_equipment_date_and_announcement_visibility_in_employee_dashboar
     _button(at, "로그아웃").click().run()
     _login(at, code, "ADMIN", "admin-pass-1")
     assert "사원 공개 공지" in _all_markdown(at)
-    at.button(key="open_admin_dashboard").click().run()
     _manager_tab(at, "공지사항 관리")
     at.button(key=f"manager_notices_row_{notice['announcement_id']}").click().run()
     at.selectbox(key="manager_notice_public").select(False)
     _button(at, "저장").click().run()
     assert "비공개" in _all_markdown(at)
-    _button(at, "← 뒤로가기").click().run()
     _button(at, "로그아웃").click().run()
     _login(at, code, "EMP001", _password("bridgesoft", "EMP001"))
     assert "사원 공개 공지" not in _all_markdown(at)

@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 playwright_sync = pytest.importorskip("playwright.sync_api")
+from tests.browser_support import launch_chromium  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE = "TCNCZD"
@@ -101,10 +102,7 @@ def app_url(tmp_path_factory):
 @pytest.fixture(scope="module")
 def browser():
     with playwright_sync.sync_playwright() as pw:
-        try:
-            chromium = pw.chromium.launch()
-        except Exception as exc:  # 브라우저 바이너리 미설치
-            pytest.skip(f"Chromium을 띄울 수 없습니다: {type(exc).__name__}")
+        chromium = launch_chromium(pw)
         yield chromium
         chromium.close()
 
@@ -113,10 +111,10 @@ def _login(browser, url: str, code: str, account_id: str, password: str):
     page = browser.new_page()
     page.goto(url)
     page.get_by_role("button", name="로그인", exact=True).click()
-    page.get_by_label("회사 코드").fill(code)
-    page.get_by_label("사번").fill(account_id)
-    page.get_by_label("비밀번호").fill(password)
-    page.get_by_label("비밀번호").press("Enter")
+    page.get_by_role("textbox", name="회사 코드").fill(code)
+    page.get_by_role("textbox", name="사번").fill(account_id)
+    page.get_by_label("비밀번호", exact=True).fill(password)
+    page.get_by_label("비밀번호", exact=True).press("Enter")
     return page
 
 
@@ -146,9 +144,9 @@ def test_wrong_password_from_real_browser_allows_retry(app_url, browser):
     try:
         page.get_by_role("alert").first.wait_for(timeout=30_000)
         assert page.get_by_text("나의 온보딩").count() == 0
-        assert page.get_by_label("회사 코드").input_value() == CODE
-        assert page.get_by_label("사번").input_value() == "EMP001"
-        password = page.get_by_label("비밀번호")
+        assert page.get_by_role("textbox", name="회사 코드").input_value() == CODE
+        assert page.get_by_role("textbox", name="사번").input_value() == "EMP001"
+        password = page.get_by_label("비밀번호", exact=True)
         assert password.input_value() == ""
         password.fill("0899")
         password.press("Enter")

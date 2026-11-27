@@ -681,10 +681,35 @@ def _log_login_failure(
     )
 
 
+def _login_payload(company: dict, account_id: str, role: str, must_change: bool) -> dict | None:
+    """로그인·세션 복원 공통 응답(data). 사원 정보가 없으면 None."""
+    base = {
+        "company_id": company["company_id"],
+        "company_name": company.get("company_name") or company["company_id"],
+        "role": role,
+        "must_change": bool(must_change),
+    }
+    if role == storage.ROLE_ADMIN:
+        return {**base, "account_id": storage.ADMIN_ACCOUNT_ID}
+    employee = storage.get_employee(company["company_id"], account_id)
+    if employee is None:
+        return None
+    return {
+        **base,
+        "employee_id": employee["employee_id"],
+        "name": employee["name"],
+        "department": employee["department"],
+        "position": employee.get("position") or None,
+    }
+
+
 @mcp.tool
 @_storage_safe
 def ui_login(company_code: str, account_id: str, password: str) -> dict:
-    """[UI 전용] 회사 코드 + 아이디(사번 또는 ADMIN) + 비밀번호 로그인."""
+    """[UI 전용] 회사 코드 + 아이디(사번 또는 ADMIN) + 비밀번호 로그인.
+
+    성공하면 새로고침 후 로그인 유지용 session_token을 함께 돌려준다(DB에는 해시만 저장).
+    """
     result = storage.authenticate(company_code, account_id, password)
     if result["status"] != "ok":
         _log_login_failure(result, company_code, account_id, password)
@@ -693,31 +718,49 @@ def ui_login(company_code: str, account_id: str, password: str) -> dict:
     if result["status"] != "ok":
         return fail("LOGIN_FAILED", MSG["LOGIN_FAILED"])
     company = result["company"]
-    base = {
-        "company_id": company["company_id"],
-        "company_name": company["company_name"],
-        "role": result["role"],
-        "must_change": result["must_change"],
-    }
-    if result["role"] == storage.ROLE_ADMIN:
-        return ok(data={**base, "account_id": storage.ADMIN_ACCOUNT_ID})
-    employee = storage.get_employee(company["company_id"], result["account_id"])
-    if employee is None:
+    data = _login_payload(company, result["account_id"], result["role"], result["must_change"])
+    if data is None:
         log.warning(
             "login failed reason=account_without_employee company_id=%s account_id=%r",
             company["company_id"],
             result["account_id"],
         )
         return fail("LOGIN_FAILED", MSG["LOGIN_FAILED"])
-    return ok(
-        data={
-            **base,
-            "employee_id": employee["employee_id"],
-            "name": employee["name"],
-            "department": employee["department"],
-            "position": employee.get("position") or None,
-        }
+    data["session_token"] = storage.create_login_session(
+        company["company_id"], result["account_id"]
     )
+    return ok(data=data)
+
+
+@mcp.tool
+@_storage_safe
+def ui_resume_session(session_token: str) -> dict:
+    """[UI 전용] 브라우저 쿠키의 세션 토큰으로 로그인 상태를 복원한다(새로고침 대응).
+
+    토큰이 없거나 만료·잠금·비활성 계정이면 INVALID_SESSION. 응답 data는 ui_login과 같다
+    (session_token 제외).
+    """
+    session = storage.resume_login_session(session_token)
+    if session is None:
+        return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+    company = storage.get_company(session["company_id"])
+    data = (
+        _login_payload(company, session["account_id"], session["role"], session["must_change"])
+        if company
+        else None
+    )
+    if data is None:
+        storage.revoke_login_session(session_token)
+        return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+    return ok(data=data)
+
+
+@mcp.tool
+@_storage_safe
+def ui_logout(session_token: str) -> dict:
+    """[UI 전용] 로그아웃: 이 브라우저의 세션 토큰을 서버에서 폐기한다."""
+    storage.revoke_login_session(session_token)
+    return ok("LOGGED_OUT")
 
 
 @mcp.tool
@@ -731,7 +774,13 @@ def ui_change_password(
         return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
     status = storage.change_password(company_id, account_id, old_password, new_password)
     if status == "ok":
-        return ok("PASSWORD_CHANGED", message=MSG["PASSWORD_CHANGED"])
+        # 변경 시 이 계정의 기존 세션은 모두 폐기된다. 지금 화면용 세션만 새로 발급한다.
+        token = storage.create_login_session(company_id, account_id)
+        return ok(
+            "PASSWORD_CHANGED",
+            data={"session_token": token},
+            message=MSG["PASSWORD_CHANGED"],
+        )
     if status == "locked":
         return fail("ACCOUNT_LOCKED", MSG["LOGIN_LOCKED"])
     if status == "too_short":
@@ -1278,6 +1327,29 @@ def ui_get_sidebar(company_id: str, employee_id: str) -> dict:
             "announcements": storage.list_announcements(company_id, public_only=True),
         }
     )
+
+
+@mcp.tool
+@_storage_safe
+def ui_record_page_denied(company_id: str, employee_id: str, page: str) -> dict:
+    """[UI 전용] 사원이 관리자 전용 페이지 주소로 들어온 것을 감사 로그에 남긴다.
+
+    화면은 홈으로 되돌린다. 신원은 세션 값으로만 정하고, page 값은 잘라서 기록만 한다.
+    """
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    safe_page = re.sub(r"[^0-9A-Za-z_\-]", "", str(page or ""))[:40] or "-"
+    storage.record_audit(
+        company_id, me["employee_id"], "page_denied", safe_page, {"reason": "admin_only"}
+    )
+    log.warning(
+        "employee opened admin page company_id=%s employee_id=%s page=%s",
+        company_id,
+        me["employee_id"],
+        safe_page,
+    )
+    return ok("PAGE_DENIED", message=MSG["ADMIN_ONLY"])
 
 
 @mcp.tool
