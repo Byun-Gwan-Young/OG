@@ -14,7 +14,8 @@
 - `data/<company_id>/` — policies, employees, locations, handovers, tickets (데이터·QA 담당). DB 가져오기 원본
 - `seed/` — 시연 초기화용 tickets.json 원본
 - `remote_server.py` — 원격 MCP 서버(HTTP). 요청마다 DB(`mcp_tokens`)로 토큰 검증, `PORT` 환경변수
-- `render.yaml`, `.python-version`, `scripts/preflight.py`, `scripts/warmup.py`, `scripts/deploy_check.py` — Render 배포(웹·MCP 2개 서비스 + Neon), 시작 전 점검, 깨우기, 배포 후 점검
+- `Dockerfile`, `docker-compose.yml`, `Caddyfile`, `env.production.example`, `deploy/` — AWS EC2 배포(웹·MCP·Caddy 컨테이너 + Neon). 서버 준비·배포·로그·중지 스크립트
+- `.python-version`, `scripts/preflight.py`, `scripts/warmup.py`, `scripts/deploy_check.py` — Python 버전 고정(Dockerfile과 같게), 시작 전 점검, 응답 확인, 배포 후 점검
 - `pwa/`, `scripts/pwa_setup.py`, `scripts/make_pwa_icons.py` — PWA 파일과 Streamlit 정적 폴더 주입(멱등, `--check`, `--undo`)
 - `docs/ui_contract.md` — app.py ↔ agent.py 규격. **반환 형식을 바꾸면 이 문서도 같이 고친다**
 
@@ -36,6 +37,8 @@
 13. streamlit 버전을 바꾸면 `python scripts/pwa_setup.py`를 다시 실행하고 PWA 동작(manifest 응답, 서비스 워커 등록, 오프라인 화면)을 확인한다.
 14. 실행 중 로컬 파일에 데이터를 쓰지 않는다. 모든 상태는 DB에 저장한다. MCP 토큰은 해시만 저장한다.
     `OFFICEGENIE_ENV=production`에서는 `DATABASE_URL`이 필수다(SQLite로 넘어가지 않는다).
+15. 운영 비밀값은 서버의 .env.production에만 둔다. 웹·MCP 포트는 Caddy 뒤에만 둔다.
+    (`.env.production`은 .gitignore·.dockerignore에 둔다. docker-compose.yml의 web·mcp에는 `ports`를 두지 않는다.)
 
 ## 확인 기준 (PRD)
 - 정상 1: bridgesoft/EMP001 "점심 식대 한도랑 내 남은 연차 며칠이야?" → 12,000원(복리후생 규정 제4조), 잔여 11일
@@ -54,7 +57,8 @@
 - 티켓 초기화: `python scripts/import_company.py --all --reset-tickets`
 - 시연용 사원 비밀번호 초기화(employees.json 값, ADMIN 제외): `python scripts/import_company.py --all --reset-employee-passwords`
 - 회사 코드 확인 / 관리자 비밀번호: `python scripts/list_companies.py`, `python scripts/set_admin_password.py <company_id>`
-- 배포 점검: `python scripts/warmup.py <웹주소> <MCP주소>`, `python scripts/deploy_check.py <웹주소> <MCP주소>`
+- EC2 서버: `bash deploy/setup_server.sh`(처음 한 번), `bash deploy/deploy.sh`(업데이트), `bash deploy/logs.sh [web|mcp|caddy]`, `bash deploy/stop.sh`
+- 배포 점검(내 PC): `python scripts/warmup.py <웹주소> <MCP주소>`, `python scripts/deploy_check.py <웹주소> <MCP주소>`
 
 ## Jitda API 보안 및 호환 규칙
 - API 키는 서버의 `LLM_API_KEY`에서 읽고 브라우저로 전달하지 않는다.

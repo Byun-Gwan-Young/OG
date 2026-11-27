@@ -31,7 +31,7 @@ flowchart LR
 | DB | PostgreSQL(Neon) / SQLite | `DATABASE_URL`이 없으면 로컬 `officegenie.db` |
 | 가져오기 | `scripts/import_company.py` | JSON 검증 후 회사 단위로 DB 교체. 디스크의 JSON을 읽는 유일한 곳 |
 | 운영 스크립트 | `scripts/list_companies.py`, `scripts/set_admin_password.py`, `scripts/issue_token.py` | 회사 코드 확인, ADMIN 비밀번호 설정, MCP 토큰 지원용 발급·폐기 |
-| 배포 | `render.yaml`, `.python-version`, `scripts/preflight.py`, `scripts/warmup.py`, `scripts/deploy_check.py` | Render Blueprint(서비스 2개), 시작 전 설정·PWA 점검, 잠든 서비스 깨우기, 배포 후 자동 점검 |
+| 배포 | `Dockerfile`, `docker-compose.yml`, `Caddyfile`, `env.production.example`, `deploy/*.sh`, `scripts/preflight.py`, `scripts/warmup.py`, `scripts/deploy_check.py` | EC2 한 대에 웹·MCP·Caddy 컨테이너, 서버 준비·배포·로그·중지 스크립트, 시작 전 설정·PWA 점검, 응답 확인, 배포 후 자동 점검 |
 | PWA | `pwa/`, `scripts/pwa_setup.py`, `scripts/make_pwa_icons.py` | manifest · 서비스 워커 · 오프라인 화면 · 아이콘, Streamlit 정적 폴더에 주입(멱등 · `--check` · `--undo`) |
 | 업로드 양식 | `templates/*.json` | 관리자 화면 "양식 다운로드" 파일(필드 설명 + 예시 1건) |
 | 원본 데이터 | `data/<company_id>/`, `seed/` | 회사별 표준 JSON 5종, 시연 초기화용 티켓 |
@@ -42,30 +42,35 @@ flowchart LR
 
 UI 개발자용 연동 규격은 [ui_contract.md](ui_contract.md)에 있습니다.
 
-## ☁️ 배포 구조 (Render + Neon)
+## ☁️ 배포 구조 (AWS EC2 + Caddy + Neon)
 
 ```mermaid
 flowchart LR
-    B([👩‍💼 브라우저 · PWA]) -->|https| P1{{Render HTTPS 프록시}}
-    C([🤖 AI 앱]) -->|"https + Bearer og_…"| P2{{Render HTTPS 프록시}}
-    P1 -->|"http + X-Forwarded-Proto"| W["officegenie<br/>preflight.py → streamlit run app.py<br/>(app.py가 mcp_server.py를 stdio로 띄움)"]
-    P2 -->|"http + X-Forwarded-Proto"| M["officegenie-mcp<br/>remote_server.py (PORT, 0.0.0.0)"]
+    B([👩‍💼 브라우저 · PWA]) -->|"https://WEB_DOMAIN"| C
+    A([🤖 AI 앱]) -->|"https://MCP_DOMAIN/mcp<br/>Bearer og_…"| C
+    subgraph EC2["EC2 · Ubuntu 24.04 · 서울(ap-northeast-2) · Docker Compose"]
+        C["caddy<br/>:80 · :443 (유일한 공개 포트)<br/>자동 HTTPS · 인증서 볼륨"]
+        C -->|"http + X-Forwarded-Proto/Host<br/>웹소켓 통과"| W["web :8501<br/>preflight.py → streamlit run app.py<br/>(app.py가 mcp_server.py를 stdio로 띄움)"]
+        C -->|"http + X-Forwarded-Proto/Host"| M["mcp :8000<br/>remote_server.py"]
+    end
     W --> N[(Neon PostgreSQL<br/>DATABASE_URL)]
     M --> N
 ```
 
-| 서비스 | 시작 | 헬스 체크 | 하는 일 |
+| 서비스 | 이미지 · 실행 | 헬스체크 | 하는 일 |
 |---|---|---|---|
-| `officegenie` | `python scripts/preflight.py && streamlit run app.py --server.port $PORT …` | `/_stcore/health` | 웹 화면 · 챗봇(LLM 키는 이 서비스에만 필요) · 사원 토큰 발급 카드 |
-| `officegenie-mcp` | `python remote_server.py` | `/health` | AI 앱용 MCP 엔드포인트 `/mcp`와 안내 홈페이지 `/` |
+| `caddy` | `caddy:2`, `Caddyfile` | 관리 API 응답 | 80·443만 외부 공개, Let's Encrypt 인증서 자동 발급·갱신(`caddy_data` 볼륨), `WEB_DOMAIN` → web, `MCP_DOMAIN` → mcp |
+| `web` | 공통 이미지, `python scripts/preflight.py && streamlit run app.py --server.port 8501 …` | `/_stcore/health` | 웹 화면 · 챗봇(LLM 키는 여기서만 씀) · 사원 토큰 발급 카드 |
+| `mcp` | 공통 이미지, `python remote_server.py` (8000) | `/health` | AI 앱용 MCP 엔드포인트 `/mcp`와 안내 홈페이지 `/` |
 
-- 두 서비스는 상태를 갖지 않습니다. 무료 플랜은 재시작·잠들 때 디스크가 초기화되므로 회사 데이터, 계정, 로그인 세션,
-  티켓, 자료실 파일, MCP 토큰, 감사 로그를 모두 Neon에 저장합니다. 그래서 웹에서 발급한 토큰을 MCP 서버가 재시작 없이 바로 인정합니다.
-- 운영 모드(`OFFICEGENIE_ENV=production`)에서 `DATABASE_URL`이 없거나 SQLite이면 `preflight.py`·`remote_server.py`·`mcp_server.py`가
-  시작 단계에서 종료합니다.
-- HTTPS는 Render 프록시가 처리합니다. 앱은 `X-Forwarded-Proto`/`X-Forwarded-Host`로 로그인 쿠키 `Secure`와 MCP 안내 주소(https)를 정하고,
-  공개 주소는 `OFFICEGENIE_MCP_PUBLIC_URL`이 있으면 그것을 씁니다.
-- 무료 플랜은 15분 무요청 시 잠들고 깨는 데 최대 1분 걸립니다. `scripts/warmup.py`로 깨우고 `scripts/deploy_check.py`로 점검합니다.
+- 이미지는 `Dockerfile` 하나(Python 3.15 slim)를 웹·MCP가 같이 쓰고 실행 명령만 다릅니다. 빌드 때 `pwa_setup.py`를 적용·확인하고, root가 아닌 사용자로 실행합니다.
+- 웹(8501)·MCP(8000)는 `expose`만 하고 `ports`가 없어 Docker 내부 네트워크에서 Caddy만 접근합니다. 보안 그룹도 22(내 IP)·80·443만 엽니다.
+- 운영 비밀 값은 서버의 `.env.production`에만 두고 `env_file`로 web·mcp에 넘깁니다. Caddy에는 도메인·메일만 넘깁니다. 이 파일은 `.gitignore`·`.dockerignore`에 있습니다.
+- 컨테이너는 상태를 갖지 않습니다. 다시 만들거나 업데이트하면 안의 파일이 사라지므로 회사 데이터, 계정, 로그인 세션, 티켓, 자료실 파일,
+  MCP 토큰, 감사 로그를 모두 Neon에 저장합니다. 그래서 웹에서 발급한 토큰을 MCP 서버가 재시작 없이 바로 인정합니다.
+- 운영 모드(`OFFICEGENIE_ENV=production`)에서 `DATABASE_URL`이 없거나 SQLite이면 `preflight.py`·`remote_server.py`·`mcp_server.py`가 시작 단계에서 종료합니다.
+- 앱은 Caddy가 붙이는 `X-Forwarded-Proto`/`X-Forwarded-Host`로 로그인 쿠키 `Secure`와 MCP 안내 주소(https)를 정하고, 공개 주소는 `OFFICEGENIE_MCP_PUBLIC_URL`이 있으면 그것을 씁니다.
+- 셋 다 `restart: unless-stopped`이고 로그는 서비스마다 10MB × 3개로 제한합니다. 배포는 `deploy/deploy.sh`(빌드 → 시작 → 헬스체크 대기 → 실패 시 로그 50줄), 점검은 `scripts/warmup.py`·`scripts/deploy_check.py`.
 
 ### `mcp_tokens` 표
 
@@ -224,9 +229,13 @@ officegenie/
 │   ├── cli_chat.py        # 터미널 테스트 채팅
 │   ├── issue_token.py     # 원격 MCP 토큰 발급 · 목록 · 폐기 (운영자 지원용, DB 기준)
 │   ├── preflight.py       # 웹 시작 전 점검: 운영 모드 DB 필수, PWA 적용 경고
-│   ├── warmup.py          # 잠든 Render 서비스 깨우기, 응답 시간 표
+│   ├── warmup.py          # 배포 서비스 응답 확인, 응답 시간 표
 │   └── deploy_check.py    # 배포 후 자동 점검 + 수동 확인 목록
-├── render.yaml            # Render Blueprint (officegenie, officegenie-mcp)
+├── Dockerfile             # 웹·MCP 공통 이미지 (Python slim, pwa_setup 적용, 비 root 실행)
+├── docker-compose.yml     # EC2 배포: web · mcp · caddy
+├── Caddyfile              # 자동 HTTPS, WEB_DOMAIN → web, MCP_DOMAIN → mcp
+├── env.production.example # 서버 .env.production 형식
+├── deploy/                # setup_server.sh · deploy.sh · logs.sh · stop.sh (EC2)
 ├── tests/                 # pytest (API 키 없이 실행, 임시 SQLite)
 └── requirements.txt
 ```
@@ -259,8 +268,9 @@ python -m pytest -q --pg-all                         # PostgreSQL에서도 전�
 | `test_remote.py` | 8 | 원격 서버(DB 토큰): 잘못된 토큰 거부, 토큰별 신원 분리, 실행 중 발급·폐기 즉시 반영, tokens.json 미사용, 프록시 헤더 https 주소, 2단계 신청, 웹·원격 동시 발급 번호 중복 없음 |
 | `test_mcp_tokens.py` | 12 | 발급한 토큰만 통과, 폐기 즉시 거부, DB에 원문 없음, 1인 3개 제한, 다른 사원 토큰 폐기 불가, 비활성 계정 거부, 감사 로그, 운영 모드 DATABASE_URL 없으면 시작 실패, preflight PWA 경고 |
 | `test_mcp_connect.py` | 9 | AI 앱 연결 카드: 발급 원문 한 번만·폐기, 안내 명령에 공개 MCP 주소, 관리자 현황·강제 폐기(같은 회사만), 미리보기에서 발급·폐기 불가, LLM 툴 아님 |
-| `test_proxy.py` | 5 | 프록시 헤더(X-Forwarded-Proto)가 https면 로그인 쿠키 Secure, render.yaml 규격, config.toml 배포 설정, PORT 환경변수 |
+| `test_proxy.py` | 5 | 프록시 헤더(X-Forwarded-Proto)가 https면 로그인 쿠키 Secure, config.toml 배포 설정, PORT 환경변수 |
 | `test_deploy_tools.py` | 4 | 로컬 웹·MCP 서버에 warmup.py·deploy_check.py 실행(PWA 파일, /health, 잘못된 토큰 401, http 경고·실패) |
+| `test_deploy_config.py` | — | EC2 구성: render.yaml·onrender.com 없음, compose에서 web·mcp 포트 미공개·헬스체크·재시작·로그 제한·인증서 볼륨, Dockerfile(pwa_setup·비 root·버전), Caddyfile, .env.production 제외, deploy 스크립트 |
 | `test_storage.py` | 24 | DB 가져오기 · 재가져오기 티켓 유지 · 롤백 · 캐시 · 동시 발급 · 로그에 주소 미노출 |
 | `test_accounts.py` | 22 | 회사 코드, 로그인 동일 문구·5회 잠금, 해시 저장, 초기 비밀번호, 응답에 비밀번호 없음, LLM 툴 목록 |
 | `test_register.py` | 7 | 회사 등록·가입 코드·ADMIN 로그인, 빈 회사 처리, 관리자 권한 |

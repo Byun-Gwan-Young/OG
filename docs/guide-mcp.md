@@ -17,7 +17,7 @@
 
 ### 1. 홈에서 토큰 발급하기
 
-1. 오피스지니 웹(예: `https://officegenie.onrender.com`)에 로그인합니다.
+1. 오피스지니 웹(예: `https://officegenie.example.com`)에 로그인합니다.
 2. 홈 아래쪽 **AI 앱 연결** 카드에서 **토큰 이름**(예: "회사 노트북 Claude Code")을 적고 **새 토큰 발급**을 누릅니다.
 3. 화면에 토큰(`og_…`)과 **이 토큰이 들어간 연결 명령**이 나옵니다. 복사 버튼으로 바로 복사하세요.
    **토큰은 이때 한 번만 보입니다.** 놓쳤다면 폐기하고 새로 발급하면 됩니다.
@@ -32,7 +32,7 @@
 **Claude Code**
 
 ```bash
-claude mcp add --transport http officegenie https://officegenie-mcp.onrender.com/mcp \
+claude mcp add --transport http officegenie https://mcp.officegenie.example.com/mcp \
   --header "Authorization: Bearer <발급받은 토큰>"
 ```
 
@@ -42,7 +42,7 @@ claude mcp add --transport http officegenie https://officegenie-mcp.onrender.com
 {
   "mcpServers": {
     "officegenie": {
-      "url": "https://officegenie-mcp.onrender.com/mcp",
+      "url": "https://mcp.officegenie.example.com/mcp",
       "headers": { "Authorization": "Bearer <발급받은 토큰>" }
     }
   }
@@ -56,14 +56,14 @@ claude mcp add --transport http officegenie https://officegenie-mcp.onrender.com
   "servers": {
     "officegenie": {
       "type": "http",
-      "url": "https://officegenie-mcp.onrender.com/mcp",
+      "url": "https://mcp.officegenie.example.com/mcp",
       "headers": { "Authorization": "Bearer <발급받은 토큰>" }
     }
   }
 }
 ```
 
-MCP 주소(`https://officegenie-mcp.onrender.com`)를 브라우저로 열면 앱별 설정을 복사할 수 있는 안내 홈페이지가 나옵니다.
+MCP 주소(`https://mcp.officegenie.example.com`)를 브라우저로 열면 앱별 설정을 복사할 수 있는 안내 홈페이지가 나옵니다.
 
 ### 3. 물어보기
 
@@ -93,7 +93,7 @@ AI 앱에서 "점심 식대 한도랑 내 남은 연차 며칠이야?"라고 물
 - **토큰은 공유하지 마세요.** 잃어버렸거나 노출됐다면 홈에서 바로 폐기하고 새로 발급하세요.
 - **비품 신청은 두 단계입니다.** AI 앱이 신청 요약을 보여주면, 확인하고 동의해야 티켓이 발급됩니다.
 - **연결이 안 되면(401):** 토큰을 잘못 붙여 넣었거나 폐기된 토큰입니다. 홈에서 새로 발급해 다시 넣어 보세요. 계정이 잠겼거나 비활성화된 경우에도 거부됩니다.
-- **첫 연결이 느리면:** 한동안 사용이 없으면 서버가 잠들어 깨는 데 최대 1분쯤 걸립니다. 잠시 뒤 다시 시도하세요.
+- **연결 자체가 안 되면:** 주소를 회사 관리자에게 확인하세요. 서버 점검·업데이트 중에는 잠시 접속되지 않을 수 있습니다.
 
 ---
 

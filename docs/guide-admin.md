@@ -7,7 +7,7 @@
 | 누구 | 하는 일 | 이 문서 |
 |---|---|---|
 | 🏢 **회사 관리자** (고객사 담당자) | 웹에서 회사 등록, 데이터 업로드, 사원 계정·신청 관리 | [1부](#1부-회사-관리자) |
-| 🧑‍🔧 **서비스 운영자** (우리) | 서버 배포, 가입 코드 관리, 운영 스크립트 | [2부](#2부-서비스-운영자) |
+| 🧑‍🔧 **서비스 운영자** (우리) | 서버 배포(AWS EC2), 가입 코드 관리, 운영 스크립트 | [2부](#2부-서비스-운영자) |
 
 ---
 
@@ -167,7 +167,7 @@ streamlit run app.py
   - 패키지 폴더에 쓸 권한이 필요합니다. 가상환경(.venv) 사용을 권장합니다.
 - 적용하지 않고 실행하면 서버 로그에 "PWA 설정이 적용되지 않았습니다. python scripts/pwa_setup.py 실행 필요" 경고가 나옵니다(화면은 정상 동작).
 - **서비스 워커와 홈 화면 설치는 HTTPS 또는 localhost에서만 동작합니다.** 직원 휴대폰에서 설치하게 하려면
-  HTTPS 주소(리버스 프록시·배포 플랫폼의 인증서)로 서비스하세요. `http://192.168.x.x` 주소에서는 웹 화면은 되지만 설치는 안 됩니다.
+  HTTPS 주소(EC2 배포의 Caddy 자동 인증서 등)로 서비스하세요. `http://192.168.x.x` 주소에서는 웹 화면은 되지만 설치는 안 됩니다.
 - `requirements.txt`의 streamlit 버전은 고정(`==`)되어 있습니다. 버전을 바꾸면 `pwa_setup.py`를 다시 실행하고
   manifest 응답·서비스 워커 등록·오프라인 화면을 확인하세요(`pytest tests/test_browser_mobile.py`).
 
@@ -198,7 +198,7 @@ python remote_server.py          # http://localhost:8000 (PORT 환경변수로 �
   발급·폐기가 **서버 재시작 없이 바로** 반영됩니다. 웹 서비스와 MCP 서버가 같은 `DATABASE_URL`을 써야 합니다.
 - 회사 관리자는 **데이터·계정 > AI 앱 연결** 탭에서 사원별 토큰 현황(이름·발급일·마지막 사용일)을 보고 강제 폐기할 수 있습니다.
   발급·폐기·조회는 감사 로그에 남습니다. 계정이 비활성화·잠금되면 그 사원의 토큰도 거부됩니다.
-- 사원 홈의 연결 안내에 나오는 주소는 `OFFICEGENIE_MCP_PUBLIC_URL`(예: `https://officegenie-mcp.onrender.com`)입니다.
+- 사원 홈의 연결 안내에 나오는 주소는 `OFFICEGENIE_MCP_PUBLIC_URL`(예: `https://mcp.officegenie.example.com`)입니다.
   비어 있으면 "운영자가 아직 설정하지 않았다"고 표시됩니다.
 - 운영자용 CLI (지원·점검용):
 
@@ -211,68 +211,178 @@ python remote_server.py          # http://localhost:8000 (PORT 환경변수로 �
 
 > 예전 방식의 `tokens.json`은 더 이상 읽지 않습니다. 남아 있다면 지워도 되며, 사원에게 홈에서 새 토큰을 발급받게 하세요.
 
-## 6. Render 배포하기
+## 6. AWS EC2 배포하기
 
-웹(`officegenie`)과 원격 MCP 서버(`officegenie-mcp`) 두 서비스를 Render 무료 플랜에 올리고, 둘 다 같은 Neon PostgreSQL을 씁니다.
-설정은 저장소 루트의 `render.yaml`(Blueprint)에 있습니다.
+EC2 서버 한 대에서 Docker Compose로 **웹(app.py) · 원격 MCP 서버(remote_server.py) · Caddy**를 함께 띄웁니다.
+Caddy가 HTTPS 인증서를 자동으로 받아 오고, 바깥에서 들어온 요청을 웹·MCP로 넘깁니다. DB는 기존처럼 Neon PostgreSQL을 씁니다.
 
 ```
-사원 브라우저 ──https──▶ officegenie (Streamlit)     ─┐
-사원 AI 앱   ──https──▶ officegenie-mcp (/mcp)       ─┴──▶ Neon PostgreSQL (DATABASE_URL)
+사원 브라우저 ──https──▶ ┌──────────── EC2 (Ubuntu 24.04) ────────────┐
+사원 AI 앱   ──https──▶ │ Caddy :80/:443 ─┬─▶ web :8501 (Streamlit)    │ ──▶ Neon PostgreSQL
+                         │                 └─▶ mcp :8000 (/mcp)         │     (DATABASE_URL)
+                         └─────────────────────────────────────────────┘
 ```
 
-> ⚠️ Render 무료 서비스는 재시작하거나 잠들 때 **서버 안의 파일이 사라집니다.** 그래서 모든 상태(회사 데이터, 계정, 세션, 티켓,
-> 자료실 파일, MCP 토큰)는 DB에만 저장합니다. `OFFICEGENIE_ENV=production`에서 `DATABASE_URL`이 없거나 SQLite이면
-> 서비스가 시작 단계에서 오류로 멈춥니다(로컬 SQLite로 넘어가지 않음).
+> 🔐 **운영 비밀 값(DB 주소, LLM 키, 가입 코드)은 서버의 `.env.production`에만 둡니다.** 저장소·채팅·스크린샷에 넣지 마세요.
+> `.env.production`은 `.gitignore`와 `.dockerignore`에 들어 있어 커밋되지 않고 이미지에도 들어가지 않습니다.
+> 웹(8501)·MCP(8000) 포트는 바깥에 열지 않고 Caddy 뒤에만 둡니다.
 
-1. **GitHub 연결**: Render 대시보드 → Account Settings → GitHub에서 이 저장소에 접근을 허용합니다.
-2. **Blueprint로 배포**: New → Blueprint → 저장소 선택. `render.yaml`을 읽어 두 서비스가 보입니다.
-   - 웹 빌드 `pip install -r requirements.txt && python scripts/pwa_setup.py`, 시작 `python scripts/preflight.py && streamlit run app.py …`
-   - MCP 빌드 `pip install -r requirements.txt`, 시작 `python remote_server.py` (Render가 주는 `PORT`, 0.0.0.0)
-   - 헬스 체크: 웹 `/_stcore/health`, MCP `/health`. Python 버전은 `PYTHON_VERSION`(= `.python-version`)으로 고정
-   - 리전은 두 서비스 모두 `singapore`입니다. Render는 만든 뒤에 리전을 바꿀 수 없으니, 바꾸려면 서비스를 새로 만들어야 합니다.
-   - 주소는 서비스 이름을 따라 `https://officegenie.onrender.com`, `https://officegenie-mcp.onrender.com`이 됩니다.
-     같은 이름이 이미 쓰이고 있으면 Render가 뒤에 문자를 붙이므로, 실제 주소는 각 서비스 화면에서 확인하세요.
-3. **환경변수 입력**: Blueprint 화면에서 `sync: false` 값을 두 서비스 모두에 넣습니다.
+필요한 파일은 저장소에 모두 있습니다.
 
-   | 변수 | 값 |
-   |---|---|
-   | `DATABASE_URL` | Neon **main** 브랜치 연결 주소 (두 서비스 같은 값) |
-   | `LLM_API_KEY`, `LLM_BASE_URL` | Jitda 키와 주소 (웹 챗봇이 씀) |
-   | `OFFICEGENIE_SIGNUP_CODE` | 회사 등록 가입 코드 (비우면 누구나 등록) |
-   | `OFFICEGENIE_MCP_PUBLIC_URL` | 처음에는 비워 둡니다(4단계에서 입력) |
+| 파일 | 하는 일 |
+|---|---|
+| `Dockerfile` | 웹·MCP가 같이 쓰는 이미지(Python 3.15 slim, 빌드 때 `pwa_setup.py` 적용, root가 아닌 사용자로 실행) |
+| `docker-compose.yml` | `web`, `mcp`, `caddy` 세 서비스. 자동 재시작, 헬스체크, 로그 크기 제한, 인증서 볼륨 |
+| `Caddyfile` | `WEB_DOMAIN` → 웹, `MCP_DOMAIN` → MCP. 자동 HTTPS, 웹소켓·프록시 헤더 통과 |
+| `env.production.example` | `.env.production` 형식 |
+| `deploy/setup_server.sh` | 처음 한 번: Docker 설치, docker 그룹, 스왑, 자동 보안 업데이트 |
+| `deploy/deploy.sh` | 업데이트할 때마다: pull → 빌드 → 시작 → 헬스체크 대기 → 이미지 정리 |
+| `deploy/logs.sh`, `deploy/stop.sh` | 서비스별 로그 보기, 전체 중지 |
 
-   `OFFICEGENIE_ENV=production`은 `render.yaml`에 이미 들어 있습니다.
-4. **첫 배포 후 MCP 주소 설정**: 배포가 끝나면 `officegenie-mcp`의 주소(예: `https://officegenie-mcp.onrender.com`)를 복사해
-   **두 서비스의** `OFFICEGENIE_MCP_PUBLIC_URL`에 넣고 다시 배포(Manual Deploy → Deploy latest commit)합니다.
-   웹은 사원 홈의 연결 안내에, MCP 서버는 안내 홈페이지에 이 주소를 씁니다.
-5. **Neon 데이터 확인**: 내 PC에서 `.env`의 `DATABASE_URL`을 같은 main 브랜치로 두고 실행합니다.
+### 1) 리전을 서울로 고르기
 
-   ```bash
-   python scripts/import_company.py --all       # 처음 한 번 (이미 있으면 티켓은 그대로 둠)
-   python scripts/list_companies.py             # 회사 코드 확인
-   python scripts/set_admin_password.py <company_id>
-   ```
+AWS 콘솔에 로그인한 뒤 오른쪽 위 리전 메뉴에서 **아시아 태평양(서울) ap-northeast-2**를 고릅니다.
+이후 만드는 인스턴스·탄력적 IP는 모두 이 리전에 있어야 합니다(리전이 다르면 목록에 안 보입니다).
 
-6. **깨우기와 점검**:
+### 2) EC2 인스턴스 시작
 
-   ```bash
-   python scripts/warmup.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
-   python scripts/deploy_check.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
-   ```
+EC2 → **인스턴스 시작**에서 아래처럼 고릅니다.
 
-   `deploy_check.py`는 웹 응답, PWA 파일(manifest·서비스 워커·오프라인 화면), HTTPS, MCP `/health`, 잘못된 토큰 거부를 자동으로
-   확인하고, 실제 로그인·토큰 발급이 필요한 항목은 수동 확인 목록으로 출력합니다. 실패가 0개면 종료 코드 0입니다.
-7. **회사 관리자에게 웹 주소 공유**: `https://officegenie.onrender.com`과 회사 코드를 전달합니다. 사원은 같은 주소에서
-   로그인하고, 휴대폰에서는 홈 화면에 추가(PWA)할 수 있습니다.
+| 항목 | 값 |
+|---|---|
+| 이름 | `officegenie` |
+| AMI | **Ubuntu Server 24.04 LTS** (64비트 x86) |
+| 인스턴스 유형 | **t3.small 권장**(2 vCPU, 메모리 2GB). t3.micro(1GB)도 되지만 빌드·챗봇 응답이 느릴 수 있습니다 |
+| 키 페어 | **새 키 페어 생성**(RSA, `.pem`) 후 내 PC에 보관. 브라우저로만 접속할 거면 EC2 Instance Connect를 써도 됩니다 |
+| 스토리지 | **20GB gp3** |
 
-- **잠들기**: 무료 플랜은 15분 동안 요청이 없으면 잠들고, 깨는 데 최대 1분쯤 걸립니다. 로그인 화면에 안내가 있고,
-  시연 전에는 `warmup.py`로 미리 깨워 두세요.
-- **프록시**: Render는 HTTPS를 앞단에서 처리하고 앱에는 HTTP로 넘깁니다. 앱은 `X-Forwarded-Proto`/`X-Forwarded-Host`를 보고
-  로그인 쿠키에 `Secure`를 붙이고, MCP 안내 홈페이지에 https 주소를 표시합니다.
-- **PWA**: 웹 시작 시 `preflight.py`와 앱이 `pwa_setup.py` 적용 여부를 확인하고, 미적용이면 로그에 경고를 남깁니다.
-- 운영 화면에서는 `render.yaml`의 `STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=none`, `STREAMLIT_CLIENT_TOOLBAR_MODE=viewer`로
-  오류 상세와 개발자 메뉴를 숨깁니다.
+네트워크 설정은 3)에서 보안 그룹을 만들면서 정합니다.
+
+### 3) 보안 그룹(방화벽)
+
+인스턴스 시작 화면의 **네트워크 설정 → 편집**에서 새 보안 그룹을 만들고 인바운드 규칙을 이렇게 둡니다.
+
+| 유형 | 포트 | 소스 | 이유 |
+|---|---|---|---|
+| SSH | 22 | **내 IP** | 서버 관리. 전체 공개하지 않습니다 |
+| HTTP | 80 | 0.0.0.0/0 (전체) | 인증서 발급 확인과 https로 넘기기 |
+| HTTPS | 443 | 0.0.0.0/0 (전체) | 웹·MCP 접속 |
+
+- 8501·8000은 **열지 않습니다.** 웹·MCP는 Docker 내부 네트워크로만 Caddy와 연결됩니다.
+- **브라우저의 EC2 Instance Connect**는 내 PC가 아니라 AWS 주소에서 SSH로 들어옵니다. SSH를 "내 IP"로만 열어 두면
+  브라우저 접속이 막히므로, 쓰려면 SSH 규칙을 하나 더 추가하고 소스에 접두사 목록
+  `com.amazonaws.ap-northeast-2.ec2-instance-connect`를 고릅니다.
+- 집·학교처럼 내 IP가 바뀌면 보안 그룹의 SSH 소스를 다시 "내 IP"로 고칩니다.
+
+### 4) 탄력적 IP 연결
+
+EC2 → **탄력적 IP → 탄력적 IP 주소 할당** → 할당된 주소 선택 → **작업 → 탄력적 IP 주소 연결** → 인스턴스 `officegenie` 선택.
+인스턴스를 껐다 켜도 주소가 바뀌지 않아 도메인을 다시 바꿀 필요가 없습니다. 이 주소를 메모해 둡니다.
+
+### 5) 도메인 두 개 준비 (웹, MCP)
+
+Caddy가 인증서를 받으려면 **도메인 이름이 이 서버의 탄력적 IP를 가리켜야** 합니다. 웹용·MCP용 두 개가 필요합니다.
+
+- **구입한 도메인이 있으면**: DNS 관리 화면에서 A 레코드 두 개를 만듭니다.
+  예: `officegenie.example.com` → 탄력적 IP, `mcp.officegenie.example.com` → 탄력적 IP
+- **무료로 하려면 [DuckDNS](https://www.duckdns.org)**: 로그인 → 하위 도메인 두 개 추가(예: `officegenie-○○`, `officegenie-○○-mcp`)
+  → 각각 **current ip**에 탄력적 IP를 넣고 **update ip**. 주소는 `https://<이름>.duckdns.org`가 됩니다.
+
+확인: 내 PC에서 `nslookup <도메인>`을 실행해 탄력적 IP가 나오면 됩니다(반영에 몇 분 걸릴 수 있음).
+
+### 6) 서버에 접속해 설치·배포
+
+**접속**: EC2 → 인스턴스 선택 → **연결 → EC2 Instance Connect → 연결**(브라우저), 또는 내 PC에서
+
+```bash
+chmod 400 officegenie.pem
+ssh -i officegenie.pem ubuntu@<탄력적 IP>
+```
+
+**처음 한 번 서버 준비** (Docker·Compose 설치, docker 그룹, 메모리 2GB 이하면 2GB 스왑, 자동 보안 업데이트):
+
+```bash
+git clone https://github.com/Byun-Gwan-Young/OG.git officegenie
+cd officegenie
+bash deploy/setup_server.sh
+exit        # docker 그룹 적용을 위해 접속을 끊고 다시 접속합니다
+```
+
+**`.env.production` 작성** (다시 접속한 뒤):
+
+```bash
+cd officegenie
+cp env.production.example .env.production
+chmod 600 .env.production
+nano .env.production      # 값을 채우고 Ctrl+O, Enter, Ctrl+X
+```
+
+| 키 | 값 |
+|---|---|
+| `DATABASE_URL` | Neon **main** 브랜치 연결 주소 |
+| `LLM_API_KEY`, `LLM_BASE_URL` | Jitda 키와 주소 |
+| `OFFICEGENIE_SIGNUP_CODE` | 회사 등록 가입 코드(비우면 누구나 등록) |
+| `WEB_DOMAIN`, `MCP_DOMAIN` | 5)의 두 도메인(`https://` 없이) |
+| `OFFICEGENIE_MCP_PUBLIC_URL` | `https://<MCP_DOMAIN>` |
+| `ACME_EMAIL` | 인증서 안내 메일을 받을 주소 |
+| `OFFICEGENIE_ENV` | `production` 그대로 |
+
+**배포**:
+
+```bash
+bash deploy/deploy.sh
+```
+
+빌드에 몇 분 걸립니다(t3.micro는 더 오래). `web`, `mcp`, `caddy`가 모두 "정상"이 되면 끝입니다.
+실패하면 그 서비스의 최근 로그 50줄이 나오고 멈춥니다. 처음 접속할 때 Caddy가 인증서를 받느라 몇 초 걸릴 수 있습니다.
+
+**Neon 데이터 확인**: 내 PC의 `.env`에 같은 main 브랜치 `DATABASE_URL`을 두고 실행합니다.
+
+```bash
+python scripts/import_company.py --all          # 처음 한 번 (이미 있으면 티켓은 그대로)
+python scripts/list_companies.py                # 회사 코드
+python scripts/set_admin_password.py <company_id>
+```
+
+**나중에 코드를 고쳤을 때**는 서버에서 `bash deploy/deploy.sh`만 다시 실행합니다. 로그는 `bash deploy/logs.sh web`, `bash deploy/logs.sh mcp -f`,
+전체 중지는 `bash deploy/stop.sh`(인증서와 DB는 그대로)입니다.
+
+### 7) 점검
+
+내 PC에서:
+
+```bash
+python scripts/warmup.py https://officegenie.example.com https://mcp.officegenie.example.com
+python scripts/deploy_check.py https://officegenie.example.com https://mcp.officegenie.example.com
+```
+
+- `warmup.py`: 두 서비스가 응답하는지와 응답 시간을 표로 보여 줍니다.
+- `deploy_check.py`: 웹 응답, PWA 파일(manifest·서비스 워커·오프라인 화면), HTTPS, MCP `/health`, 안내 홈페이지 주소,
+  잘못된 토큰 거부(401)를 자동으로 확인하고, 직접 해 봐야 하는 항목을 수동 확인 목록으로 출력합니다. 실패가 0개면 종료 코드 0입니다.
+- **휴대폰에서 PWA 설치 확인**: 휴대폰 브라우저로 `https://<WEB_DOMAIN>` 접속 → 홈 화면에 추가([직원 가이드](guide-employee.md#6-홈-화면에-추가-앱처럼-쓰기)).
+- **MCP 연결 확인**: 사원으로 로그인 → 홈의 **AI 앱 연결**에서 토큰 발급 → 안내 명령으로 Claude Code에 연결 → "점심 식대 한도랑 내 남은 연차 며칠이야?"
+  → 토큰 폐기 후 바로 401이 되는지.
+- 마지막으로 회사 관리자에게 `https://<WEB_DOMAIN>`과 회사 코드를 전달합니다.
+
+### 💸 비용 주의와 정리
+
+인스턴스, 탄력적 IP, 디스크(EBS)는 **켜 두거나 남겨 두는 동안 계속 과금**됩니다(크레딧이 있으면 크레딧에서 차감).
+인스턴스를 "중지"해도 디스크와 탄력적 IP 요금은 계속 나갑니다. 정확한 요금은 AWS 요금 페이지(서울 리전)에서 확인하세요.
+
+**발표·시연이 끝나면** (서울 리전인지 먼저 확인):
+
+1. EC2 → 인스턴스 → `officegenie` 선택 → **인스턴스 상태 → 인스턴스 종료(삭제)**. 데이터는 Neon에 있으므로 서버를 지워도 남습니다.
+2. EC2 → **탄력적 IP** → 주소 선택 → **작업 → 탄력적 IP 주소 연결 해제** → **작업 → 탄력적 IP 주소 릴리스**.
+   릴리스하지 않으면 연결되지 않은 IP도 계속 과금됩니다.
+3. EC2 → **볼륨**에서 남은 볼륨(상태 "사용 가능")을 삭제, **스냅샷**에서 직접 만든 스냅샷이 있으면 삭제합니다.
+4. DuckDNS를 썼다면 하위 도메인을 지우거나 그대로 둬도 됩니다(무료). 구입한 도메인의 A 레코드는 지워 둡니다.
+
+**결제 알림 설정** (처음 계정을 만들었을 때 한 번):
+
+- **AWS Budgets**: 결제 및 비용 관리 → **예산 → 예산 생성** → 템플릿 **월별 비용 예산**(또는 **제로 지출 예산**) → 금액(예: 10 USD)과 알림 받을 메일 입력.
+  크레딧을 쓰는 중이라면 사용자 지정 예산의 고급 옵션에서 **크레딧 제외**를 체크해야 실제 사용량이 크레딧으로 가려지지 않습니다.
+- **결제 알람(CloudWatch)**: 결제 및 비용 관리 → 결제 기본 설정 → **결제 알림 받기** 켜기 →
+  리전을 **미국 동부(버지니아 북부) us-east-1**로 바꿔 CloudWatch → 경보 → 경보 생성 → 지표 **결제 → 총 예상 요금** → 기준 금액과 메일(SNS 주제) 지정.
 
 ## 7. 운영
 
@@ -303,8 +413,10 @@ python remote_server.py          # http://localhost:8000 (PORT 환경변수로 �
 | 챗봇이 "불러오지 못했어요"만 표시 | `.env`의 `LLM_API_KEY`, `LLM_BASE_URL`을 확인하세요. `scripts/cli_chat.py`로 실행하면 `[오류 원인]`이 출력됩니다. |
 | 다른 PC에서 웹 화면 접속 불가 | Windows 방화벽에서 "개인 네트워크 허용"을 선택하고, 같은 네트워크인지 확인하세요. |
 | AI 앱에서 MCP 연결 시 401 | 토큰이 틀렸거나 폐기된 토큰, 또는 계정이 잠금·비활성 상태입니다. 사원이 홈의 AI 앱 연결 카드에서 새로 발급하면 바로 쓸 수 있습니다(재시작 불필요). 웹과 MCP 서버의 `DATABASE_URL`이 같은지도 확인하세요. |
-| Render에서 서비스가 바로 종료됨 | 로그에 "DATABASE_URL이 없습니다"가 있으면 환경변수를 입력하세요. 운영 모드에서는 SQLite로 동작하지 않습니다. |
-| Render 첫 접속이 1분 가까이 걸림 | 무료 플랜이 잠들어 있던 것입니다. `scripts/warmup.py`로 미리 깨우세요. |
+| `deploy.sh`가 web 또는 mcp에서 실패 | 출력된 로그 50줄을 봅니다. "DATABASE_URL이 없습니다"면 `.env.production`을 확인하세요(운영 모드는 SQLite로 동작하지 않음). |
+| https 주소가 열리지 않음 / 인증서 오류 | 도메인이 탄력적 IP를 가리키는지(`nslookup`), 보안 그룹에 80·443이 열려 있는지 확인하고 `bash deploy/logs.sh caddy`를 봅니다. |
+| `permission denied ... docker.sock` | `setup_server.sh` 뒤에 접속을 끊고 다시 접속하지 않은 것입니다. |
+| EC2 Instance Connect 접속 실패 | SSH 규칙 소스에 `com.amazonaws.ap-northeast-2.ec2-instance-connect` 접두사 목록이 있는지 확인하세요. |
 | Windows에서 한글 깨짐 | `chcp 65001` 입력 후 다시 실행하세요. |
 | 휴대폰에 "홈 화면에 추가/설치"가 안 나옴 | HTTPS 주소인지, `python scripts/pwa_setup.py --check`가 "적용됨"인지 확인하세요. streamlit을 다시 설치했다면 `pwa_setup.py`를 다시 실행합니다. |
 | 새로고침하면 로그인이 풀림 | 30분 무동작·12시간 경과·비밀번호 변경 시에는 정상입니다. 브라우저가 쿠키를 막고 있지 않은지 확인하세요. |
@@ -318,12 +430,13 @@ python remote_server.py          # http://localhost:8000 (PORT 환경변수로 �
 | `OFFICEGENIE_LLM_TIMEOUT` | `30` | LLM 응답 대기 시간(초) |
 | `DATABASE_URL` | (없으면 `./officegenie.db`) | PostgreSQL(Neon) 주소. 비밀 정보. 운영 모드에서는 필수 |
 | `OFFICEGENIE_ENV` | (없음) | `production`이면 `DATABASE_URL` 필수(없거나 SQLite면 시작 실패) |
-| `OFFICEGENIE_MCP_PUBLIC_URL` | (없음) | 사원에게 안내할 원격 MCP 공개 주소(예: `https://officegenie-mcp.onrender.com`) |
+| `OFFICEGENIE_MCP_PUBLIC_URL` | (없음) | 사원에게 안내할 원격 MCP 공개 주소(예: `https://mcp.officegenie.example.com`) |
+| `WEB_DOMAIN`, `MCP_DOMAIN`, `ACME_EMAIL` | (EC2 배포 필수) | Caddy가 인증서를 받을 두 도메인과 안내 메일. `.env.production`에만 둠 |
 | `TEST_DATABASE_URL` | (선택) | 테스트 전용 DB(dev 브랜치) 주소. `DATABASE_URL`과 달라야 함 |
 | `OFFICEGENIE_SIGNUP_CODE` | (없음 = 누구나 등록) | 회사 등록에 필요한 서비스 가입 코드 |
 | `OFFICEGENIE_CACHE_TTL` | `60` | 관리자 반영 후 다른 서버 프로세스가 새 데이터를 확인하는 주기(초) |
 | `OFFICEGENIE_LOG_LEVEL` | `INFO` | `DEBUG`로 두면 툴 호출마다 DB 왕복 횟수를 기록 |
-| `PORT` / `OFFICEGENIE_PORT` | `8000` | 원격 MCP 서버 포트 (`PORT` 우선, Render가 지정) |
+| `PORT` / `OFFICEGENIE_PORT` | `8000` | 원격 MCP 서버 포트 (`PORT` 우선) |
 
 ---
 
