@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import csv
 import html
+import io
+import logging
+import time
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -9,17 +14,36 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit.runtime.scriptrunner_utils.exceptions import (
+    RerunException,
+    StopException,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 from agent import OfficeGenieAgent
 
+log = logging.getLogger("officegenie.app")
+POST_LOGIN_ERROR = (
+    "화면을 불러오는 중 문제가 발생했습니다. 잠시 후 다시 시도하거나 다시 로그인해 주세요."
+)
+_SAFE_MESSAGE_ERRORS = (KeyError, IndexError, AttributeError, TypeError, ValueError)
 
 st.set_page_config(page_title="오피스 지니 | 신입사원 온보딩", layout="wide")
 
 WELCOME_TEXT = "안녕하세요. 온보딩이나 비품 지급에 대해 궁금한 점을 물어보세요."
 SUGGESTED_QUESTION = "제 모니터는 언제 받을 수 있나요?"
+TEMPLATE_DIR = PROJECT_ROOT / "templates"
+UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+DATA_KINDS = (
+    ("policies", "규정"),
+    ("employees", "사원"),
+    ("locations", "장소"),
+    ("handovers", "인수인계서"),
+    ("tickets", "비품·신청 규칙"),
+)
+SESSION_TIMEOUT_SEC = 30 * 60  # 30분 무동작 시 자동 로그아웃
 CHAT_FAILURE_CODES = {
     "FALLBACK",
     "LLM_UNAVAILABLE",
@@ -60,11 +84,13 @@ def _new_chat_state(company_id: str, employee_id: str, is_open: bool) -> None:
 
 
 def _toggle_chat_panel(company_id: str, employee_id: str) -> None:
+    _touch_activity()
     is_open = bool(st.session_state.get("chat_panel_open", False))
     _new_chat_state(company_id, employee_id, not is_open)
 
 
 def _start_send(text: str, *, append_user: bool = True) -> None:
+    _touch_activity()
     text = (text or "").strip()
     if (
         not text
@@ -102,6 +128,7 @@ def _retry_last_question() -> None:
 
 
 def _start_ticket_action(action: str) -> None:
+    _touch_activity()
     if st.session_state.get("chat_pending") or not st.session_state.get(
         "chat_panel_open"
     ):
@@ -190,53 +217,6 @@ def _equipment_status(status: str) -> tuple[str, str]:
     return "접수 완료", "received"
 
 
-def _resolve_employee_id(
-    company_id: str,
-    employee_summaries: list[dict],
-    employee_records: list[dict] | None,
-) -> str | None:
-    available_ids = {
-        employee.get("employee_id")
-        for employee in employee_summaries
-        if employee.get("employee_id")
-    }
-
-    current_identity = st.session_state.get("dashboard_identity")
-    current_employee_id = st.session_state.get("employee_id")
-    if (
-        isinstance(current_identity, (tuple, list))
-        and len(current_identity) == 2
-        and current_identity[0] == company_id
-    ):
-        current_employee_id = current_identity[1]
-    if current_employee_id in available_ids:
-        return current_employee_id
-
-    # On a fresh demo session, select a current onboarding employee from DB
-    # metadata instead of pinning an employee ID or relying on array position.
-    onboarding_records = [
-        record
-        for record in employee_records or []
-        if isinstance(record, dict)
-        and record.get("employee_id") in available_ids
-        and isinstance(record.get("onboarding_week"), int)
-        and not isinstance(record.get("onboarding_week"), bool)
-    ]
-    if onboarding_records:
-        selected = min(
-            onboarding_records,
-            key=lambda record: (
-                record["onboarding_week"],
-                str(record["employee_id"]),
-            ),
-        )
-        return selected["employee_id"]
-
-    if len(available_ids) == 1:
-        return next(iter(available_ids))
-    return None
-
-
 def _decimal_text(value: Decimal) -> str:
     text = format(value, "f")
     if "." in text:
@@ -286,7 +266,14 @@ def _render_dashboard(
     date_label = f"{now.month}월 {now.day}일 {weekdays[now.weekday()]}요일"
     name = _escape(employee.get("name", "신입사원"))
     department = _escape(employee.get("department", ""))
-    position = _escape(employee.get("position", ""))
+    position_value = employee.get("position")
+    position = _escape(position_value) if position_value else ""
+    # 직급이 없는 회사(예: position 필드가 없는 데이터)는 직급과 구분선을 숨긴다.
+    profile_meta = (
+        f"<span>{department}</span><i></i><span>{position}</span>"
+        if position
+        else f"<span>{department}</span>"
+    )
 
     announcements = (
         ("신입사원 오리엔테이션 안내", f"{now.month}월 24일"),
@@ -340,6 +327,7 @@ def _render_dashboard(
           <span class="brand-name">오피스 지니</span>
           <span class="brand-divider"></span>
           <span class="brand-subtitle">신입사원 온보딩</span>
+          <span class="header-user">{name}({department})</span>
         </div>
       </header>
       <div class="dashboard-main">
@@ -355,7 +343,7 @@ def _render_dashboard(
           <div class="profile-copy">
             <span class="eyebrow">내 정보</span>
             <h2>{name}</h2>
-            <div class="profile-meta"><span>{department}</span><i></i><span>{position}</span></div>
+            <div class="profile-meta">{profile_meta}</div>
           </div>
           <div class="leave-summary">
             <span class="eyebrow">잔여 연차</span>
@@ -455,6 +443,8 @@ def _render_pending_ticket() -> None:
 def _render_chat_panel(company_id: str, employee_id: str) -> None:
     if not st.session_state.get("chat_panel_open"):
         return
+    if _session_expired():
+        st.rerun(scope="app")
 
     _finish_chat_request()
 
@@ -660,6 +650,61 @@ def _render_styles() -> None:
         }
         .brand-divider { width: 1px; height: 20px; margin: 0 8px 0 26px; background: var(--line); }
         .brand-subtitle { color: #71819A; font-size: 14px; white-space: nowrap; }
+        .header-user {
+            margin-left: auto;
+            margin-right: 92px;
+            color: var(--body);
+            font-size: 14px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .st-key-header_logout {
+            position: fixed !important;
+            top: 22px;
+            right: max(24px, calc((100vw - 1280px) / 2));
+            z-index: 1000;
+            width: auto !important;
+        }
+        .st-key-header_logout button {
+            min-height: 36px !important;
+            padding: 4px 14px !important;
+            border-radius: 10px !important;
+            border: 1px solid var(--line) !important;
+            background: #fff !important;
+            color: var(--body) !important;
+            font-size: 14px !important;
+        }
+        .st-key-auth_card {
+            width: min(440px, calc(100% - 32px));
+            margin: 72px auto 40px auto !important;
+            padding: 32px 32px 24px 32px;
+            background: #fff;
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            box-shadow: 0 12px 32px rgba(32, 45, 64, 0.06);
+        }
+        .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .auth-brand strong { font-size: 22px; color: var(--title); }
+        .auth-sub { color: var(--muted); font-size: 14px; margin: 0 0 18px 0; }
+        .auth-foot { margin: 14px 0 0 0; }
+        .company-code-label { color: var(--muted); font-size: 13px; margin-top: 8px; }
+        .company-code-big {
+            font-size: 44px; font-weight: 800; letter-spacing: 0.18em;
+            color: var(--blue); margin: 4px 0 8px 0;
+            font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+        }
+        .st-key-admin_root {
+            width: min(1280px, calc(100% - 48px));
+            margin: 24px auto 48px auto !important;
+        }
+        .admin-header {
+            display: flex; align-items: center; gap: 12px;
+            height: 64px; padding: 0 4px; margin-bottom: 12px;
+            border-bottom: 1px solid var(--line);
+        }
+        .admin-header .brand-name { font-size: 20px; font-weight: 700; }
+        .admin-header .header-user { margin-left: auto; }
+        .st-key-admin_root [data-testid="stMarkdownContainer"] h4 { margin-top: 18px; }
         .dashboard-main {
             width: min(1280px, calc(100% - 48px));
             margin: 0 auto;
@@ -1358,44 +1403,312 @@ def _render_styles() -> None:
     )
 
 
-def main() -> None:
-    _render_styles()
+# ---------------------------------------------------------------------------
+# 로그인 세션
+# 신원(company_id, account_id, role)은 st.session_state["auth"]에만 둔다.
+# URL 쿼리나 화면 입력으로 바꿀 수 있는 경로는 없다.
+# ---------------------------------------------------------------------------
 
-    agent = get_agent()
-    companies_result = agent.list_companies()
-    if not companies_result.get("ok"):
-        st.error(companies_result.get("message", "회사 정보를 불러오지 못했습니다."))
-        st.stop()
-    companies = companies_result.get("data", {}).get("companies", [])
-    if not companies:
-        st.error("등록된 회사 정보가 없습니다.")
-        st.stop()
 
-    company_id = companies[0]["company_id"]
-    employees_result = agent.list_employees(company_id)
-    if not employees_result.get("ok"):
-        st.error(employees_result.get("message", "사원 정보를 불러오지 못했습니다."))
-        st.stop()
-    employees = employees_result.get("data", {}).get("employees", [])
-    if not employees:
-        st.error("등록된 사원 정보가 없습니다.")
-        st.stop()
-    # 사원 목록(onboarding_week 포함)과 잔여 연차는 모두 MCP(DB) 응답에서 가져온다.
-    employee_id = _resolve_employee_id(company_id, employees, employees)
-    if employee_id is None:
-        st.error("현재 사원 정보를 확인할 수 없습니다.")
-        st.stop()
-    employee = next(row for row in employees if row.get("employee_id") == employee_id)
+def _touch_activity() -> None:
+    st.session_state.last_activity = time.monotonic()
+
+
+def _session_expired() -> bool:
+    if not st.session_state.get("auth"):
+        return False
+    last = st.session_state.get("last_activity")
+    return last is not None and time.monotonic() - last > SESSION_TIMEOUT_SEC
+
+
+def _logout(notice: str = "") -> None:
+    """세션 전체(신원·대화·대기 중인 요청)를 지운다."""
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    if notice:
+        st.session_state.auth_notice = notice
+
+
+def _on_logout_click() -> None:
+    _logout()
+
+
+@st.fragment(run_every=60)
+def _idle_watch() -> None:
+    """아무 조작이 없어도 30분이 지나면 화면을 로그인으로 되돌린다."""
+    if _session_expired():
+        st.rerun(scope="app")
+
+
+def _brand_html() -> str:
+    return (
+        "<div class='auth-brand'>"
+        "<span class='header-logo'><svg viewBox='0 0 32 32' fill='none' aria-hidden='true'>"
+        "<path d='M8.3 8.2h15.4a2.5 2.5 0 0 1 2.5 2.5v8.1a2.5 2.5 0 0 1-2.5 2.5h-7.2l-5.2 3.5v-3.5h-3a2.5 2.5 0 0 1-2.5-2.5v-8.1a2.5 2.5 0 0 1 2.5-2.5Z' stroke='white' stroke-width='1.8' stroke-linejoin='round'/>"
+        "<path d='M11 13h10M11 16.5h7' stroke='white' stroke-width='1.7' stroke-linecap='round'/>"
+        "</svg></span><strong>오피스 지니</strong></div>"
+    )
+
+
+def _auth_from_login(data: dict) -> dict:
+    auth = {
+        "company_id": data["company_id"],
+        "company_name": data.get("company_name") or "",
+        "role": data["role"],
+        "must_change": bool(data.get("must_change")),
+    }
+    if data["role"] == "admin":
+        auth["account_id"] = data.get("account_id") or "ADMIN"
+    else:
+        auth.update(
+            account_id=data["employee_id"],
+            employee_id=data["employee_id"],
+            name=data.get("name") or "",
+            department=data.get("department") or "",
+            position=data.get("position"),
+        )
+    return auth
+
+
+def _log_post_login_failure(stage: str, exc: BaseException, auth: dict | None) -> None:
+    """로그인 이후 단계의 오류를 서버 로그에 남긴다(비밀번호·해시·DB 주소 제외).
+
+    파일·줄·함수 위치와 예외 종류만 남기고, 메시지는 값이 섞이기 어려운
+    단순 예외에서만 짧게 남긴다.
+    """
+    frames = traceback.extract_tb(exc.__traceback__)[-6:]
+    where = " <- ".join(
+        f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in reversed(frames)
+    )
+    detail = str(exc)[:160] if isinstance(exc, _SAFE_MESSAGE_ERRORS) else ""
+    auth = auth or {}
+    log.error(
+        "post-login failure stage=%s role=%s company_id=%s account_id=%s error=%s %s at %s",
+        stage,
+        auth.get("role", "-"),
+        auth.get("company_id", "-"),
+        auth.get("account_id", "-"),
+        type(exc).__name__,
+        detail,
+        where or "-",
+    )
+
+
+def _render_post_login_error() -> None:
+    st.error(POST_LOGIN_ERROR)
+    st.button("다시 로그인", key="post_login_error_logout", on_click=_on_logout_click)
+
+
+def _go_to(view: str) -> None:
+    st.session_state.auth_view = view
+
+
+def _login_as_registered_admin() -> None:
+    registered = st.session_state.pop("registered_company", None) or {}
+    st.session_state.login_prefill_code = registered.get("company_code", "")
+    st.session_state.login_prefill_account = registered.get("account_id", "ADMIN")
+    st.session_state.auth_view = "login"
+
+
+def _render_register() -> None:
+    settings = get_agent().signup_settings()
+    needs_code = bool((settings.get("data") or {}).get("signup_code_required"))
+    with st.container(key="auth_card"):
+        st.markdown(
+            _brand_html()
+            + "<p class='auth-sub'>회사를 등록하면 회사 코드가 만들어집니다. "
+            "관리자 화면에서 규정과 사원 데이터를 올리면 바로 사용할 수 있어요.</p>",
+            unsafe_allow_html=True,
+        )
+        with st.form("register_form", border=False):
+            company_name = st.text_input("회사명", key="register_company_name")
+            password = st.text_input(
+                "관리자 비밀번호 (8자 이상)", type="password", key="register_password"
+            )
+            again = st.text_input(
+                "관리자 비밀번호 확인", type="password", key="register_password_again"
+            )
+            signup_code = (
+                st.text_input(
+                    "서비스 가입 코드",
+                    type="password",
+                    key="register_signup_code",
+                    help="서비스 운영자에게 받은 가입 코드",
+                )
+                if needs_code
+                else ""
+            )
+            submitted = st.form_submit_button(
+                "회사 등록", type="primary", use_container_width=True
+            )
+        st.button("로그인 화면으로", key="register_back", on_click=_go_to, args=("login",))
+        if submitted:
+            if not company_name.strip():
+                st.warning("회사명을 입력해 주세요.")
+                return
+            if len(password) < 8:
+                st.error("관리자 비밀번호는 8자 이상이어야 합니다.")
+                return
+            if password != again:
+                st.error("관리자 비밀번호와 확인 값이 다릅니다.")
+                return
+            result = get_agent().register_company(company_name, password, signup_code)
+            if not result.get("ok"):
+                st.error(result.get("message") or "회사를 등록하지 못했습니다.")
+                return
+            for key in ("register_password", "register_password_again", "register_signup_code"):
+                st.session_state.pop(key, None)
+            st.session_state.registered_company = result["data"]
+            st.session_state.auth_view = "registered"
+            st.rerun()
+
+
+def _render_registered() -> None:
+    registered = st.session_state.get("registered_company")
+    if not registered:
+        _go_to("login")
+        st.rerun()
+    code = registered["company_code"]
+    with st.container(key="auth_card"):
+        st.markdown(
+            _brand_html()
+            + f"<p class='auth-sub'>{_escape(registered['company_name'])} 등록을 마쳤습니다.</p>"
+            "<div class='company-code-label'>회사 코드</div>"
+            f"<div class='company-code-big'>{_escape(code)}</div>",
+            unsafe_allow_html=True,
+        )
+        st.code(code, language=None)  # 오른쪽 위 복사 버튼
+        st.success("사원들에게 이 코드를 알려주세요. 사원은 회사 코드 + 사번 + 비밀번호로 로그인합니다.")
+        st.markdown(
+            "<p class='auth-sub'>관리자 로그인: 회사 코드 "
+            f"<b>{_escape(code)}</b> · 아이디 <b>ADMIN</b> · 방금 정한 관리자 비밀번호</p>",
+            unsafe_allow_html=True,
+        )
+        st.button(
+            "관리자로 로그인하기",
+            key="registered_login",
+            type="primary",
+            use_container_width=True,
+            on_click=_login_as_registered_admin,
+        )
+
+
+def _render_login() -> None:
+    if "login_prefill_code" in st.session_state:
+        st.session_state.login_company_code = st.session_state.pop("login_prefill_code")
+        st.session_state.login_account_id = st.session_state.pop(
+            "login_prefill_account", ""
+        )
+    with st.container(key="auth_card"):
+        st.markdown(
+            _brand_html()
+            + "<p class='auth-sub'>회사 코드와 사번(관리자는 ADMIN)으로 로그인하세요.</p>",
+            unsafe_allow_html=True,
+        )
+        notice = st.session_state.pop("auth_notice", "")
+        if notice:
+            st.info(notice)
+        with st.form("login_form", clear_on_submit=False, border=False):
+            company_code = st.text_input(
+                "회사 코드", key="login_company_code", placeholder="예: AB3K7Q"
+            )
+            account_id = st.text_input(
+                "아이디", key="login_account_id", placeholder="사번 또는 ADMIN"
+            )
+            password = st.text_input("비밀번호", type="password", key="login_password")
+            submitted = st.form_submit_button(
+                "로그인", type="primary", use_container_width=True
+            )
+        st.markdown("<p class='auth-sub auth-foot'>처음 오셨나요?</p>", unsafe_allow_html=True)
+        st.button(
+            "회사 등록하기", key="go_register", on_click=_go_to, args=("register",)
+        )
+        if submitted:
+            if not company_code.strip() or not account_id.strip() or not password:
+                st.warning("회사 코드, 아이디, 비밀번호를 모두 입력해 주세요.")
+                return
+            result = get_agent().login(company_code, account_id, password)
+            if not result.get("ok"):
+                st.error(result.get("message") or "로그인하지 못했습니다.")
+                return
+            try:
+                auth = _auth_from_login(result["data"])
+            except Exception as exc:  # 로그인은 성공했으나 응답 처리에서 실패
+                _log_post_login_failure("login_response", exc, None)
+                st.error(POST_LOGIN_ERROR)
+                return
+            # 로그인 전 입력값은 남기지 않는다.
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.session_state.auth = auth
+            _touch_activity()
+            st.rerun()
+
+
+def _render_change_password(auth: dict) -> None:
+    minimum = 8 if auth["role"] == "admin" else 4
+    with st.container(key="auth_card"):
+        st.markdown(
+            _brand_html()
+            + "<p class='auth-sub'>처음 로그인하셨거나 비밀번호가 초기화되었습니다. "
+            "새 비밀번호를 설정해 주세요.</p>",
+            unsafe_allow_html=True,
+        )
+        with st.form("change_password_form", border=False):
+            old = st.text_input("현재 비밀번호", type="password", key="pw_old")
+            new = st.text_input(
+                f"새 비밀번호 ({minimum}자 이상)", type="password", key="pw_new"
+            )
+            again = st.text_input("새 비밀번호 확인", type="password", key="pw_again")
+            submitted = st.form_submit_button(
+                "비밀번호 변경", type="primary", use_container_width=True
+            )
+        st.button("로그아웃", key="pw_logout", on_click=_on_logout_click)
+        if submitted:
+            if new != again:
+                st.error("새 비밀번호와 확인 값이 다릅니다.")
+                return
+            result = get_agent().change_password(
+                auth["company_id"], auth["account_id"], old, new
+            )
+            if result.get("code") == "INVALID_SESSION":
+                _logout(result.get("message", ""))
+                st.rerun()
+            if result.get("code") == "ACCOUNT_LOCKED":
+                _logout(result.get("message", ""))
+                st.rerun()
+            if not result.get("ok"):
+                st.error(result.get("message") or "비밀번호를 변경하지 못했습니다.")
+                return
+            auth["must_change"] = False
+            st.session_state.auth = auth
+            st.rerun()
+
+
+def _render_logout_button() -> None:
+    with st.container(key="header_logout"):
+        st.button("로그아웃", key="logout_button", on_click=_on_logout_click)
+
+
+def _render_employee(agent: OfficeGenieAgent, auth: dict) -> None:
+    company_id = auth["company_id"]
+    employee_id = auth["employee_id"]
 
     dashboard_identity = (company_id, employee_id)
     if st.session_state.get("dashboard_identity") != dashboard_identity:
         st.session_state.dashboard_identity = dashboard_identity
         _new_chat_state(company_id, employee_id, False)
 
+    fallback_employee = {
+        "employee_id": employee_id,
+        "name": auth.get("name"),
+        "department": auth.get("department"),
+        "position": auth.get("position"),
+    }
     sidebar_result = agent.get_sidebar(company_id, employee_id)
     if sidebar_result.get("ok"):
         sidebar_data = sidebar_result.get("data", {})
-        dashboard_employee = sidebar_data.get("employee", employee)
+        dashboard_employee = sidebar_data.get("employee", fallback_employee)
         tickets = sidebar_data.get("tickets", [])
         annual_leave = sidebar_data.get("annual_leave")
         remaining_leave = (
@@ -1403,11 +1716,18 @@ def main() -> None:
             if isinstance(annual_leave, dict)
             else None
         )
+    elif sidebar_result.get("code") == "INVALID_SESSION":
+        _logout(sidebar_result.get("message", ""))
+        st.rerun()
     else:
-        dashboard_employee = employee
+        st.warning(
+            sidebar_result.get("message") or "사내 시스템 연결이 일시적으로 원활하지 않습니다."
+        )
+        dashboard_employee = fallback_employee
         tickets = []
         remaining_leave = None
 
+    _render_logout_button()
     with st.container(key="dashboard_root"):
         _render_dashboard(dashboard_employee, tickets, remaining_leave)
 
@@ -1422,5 +1742,645 @@ def main() -> None:
     if st.session_state.get("chat_panel_open"):
         _render_chat_panel(company_id, employee_id)
 
+
+# ---------------------------------------------------------------------------
+# 관리자 화면. 모든 호출은 agent.admin_call로 가고, 서버가 관리자 여부를 다시 확인한다.
+# ---------------------------------------------------------------------------
+
+
+def _admin(agent: OfficeGenieAgent, auth: dict, name: str, **args) -> dict:
+    result = agent.admin_call(name, auth["company_id"], auth["account_id"], **args)
+    if result.get("code") == "PERMISSION_DENIED":
+        _logout(result.get("message", ""))
+        st.rerun()
+    return result
+
+
+def _short_time(value: object) -> str:
+    text = str(value or "")
+    return text[:16].replace("T", " ") if text else "-"
+
+
+def _csv_bytes(rows: list[dict], columns: list[tuple[str, str]]) -> bytes:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([label for _, label in columns])
+    for row in rows:
+        writer.writerow([row.get(key, "") for key, _ in columns])
+    return buffer.getvalue().encode("utf-8-sig")
+
+
+def _template_bytes(kind: str) -> bytes | None:
+    path = TEMPLATE_DIR / f"{kind}.json"
+    return path.read_bytes() if path.is_file() else None
+
+
+def _collect_upload_files(uploaded: list) -> None:
+    """업로더 파일을 메모리에만 담는다(디스크에 저장하지 않음)."""
+    signature = tuple((f.name, f.size, getattr(f, "file_id", "")) for f in uploaded or [])
+    if signature == st.session_state.get("admin_uploader_sig", ()):
+        return
+    st.session_state.admin_uploader_sig = signature
+    st.session_state.admin_preview = None
+    st.session_state.admin_preview_issues = None
+    files, local_issues = [], []
+    for item in uploaded or []:
+        raw = item.getvalue()
+        if len(raw) > UPLOAD_MAX_BYTES:
+            local_issues.append(
+                {"file": item.name, "item": "-", "field": "-", "problem": "파일 크기는 2MB 이하여야 합니다."}
+            )
+            continue
+        try:
+            content = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            local_issues.append(
+                {"file": item.name, "item": "-", "field": "-", "problem": "UTF-8 텍스트 파일이 아닙니다."}
+            )
+            continue
+        files.append({"name": item.name, "content": content})
+    st.session_state.admin_upload_files = files
+    st.session_state.admin_upload_local_issues = local_issues
+
+
+def _issues_table(issues: list[dict]) -> None:
+    st.dataframe(
+        [
+            {
+                "파일": i.get("file", "-"),
+                "항목": i.get("item", "-"),
+                "필드": i.get("field", "-"),
+                "문제": i.get("problem", ""),
+            }
+            for i in issues
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+def _admin_preview(agent: OfficeGenieAgent, auth: dict) -> None:
+    files = st.session_state.get("admin_upload_files") or []
+    result = _admin(agent, auth, "ui_admin_preview_upload", files=files)
+    if result.get("ok"):
+        st.session_state.admin_preview = {"files": files, "data": result["data"]}
+        st.session_state.admin_preview_issues = None
+    else:
+        st.session_state.admin_preview = None
+        st.session_state.admin_preview_issues = {
+            "message": result.get("message", ""),
+            "issues": (result.get("data") or {}).get("issues") or [],
+        }
+
+
+def _admin_apply(agent: OfficeGenieAgent, auth: dict) -> None:
+    preview = st.session_state.get("admin_preview")
+    if not preview:
+        return
+    result = _admin(
+        agent,
+        auth,
+        "ui_admin_apply_upload",
+        files=preview["files"],
+        base_version=preview["data"]["base_version"],
+        fingerprint=preview["data"]["fingerprint"],
+    )
+    if not result.get("ok"):
+        st.session_state.admin_preview = None
+        st.session_state.admin_preview_issues = {
+            "message": result.get("message", ""),
+            "issues": (result.get("data") or {}).get("issues") or [],
+        }
+        return
+    data = result["data"]
+    st.session_state.admin_applied = {
+        "data_version": data["data_version"],
+        "cache_ttl_seconds": data.get("cache_ttl_seconds"),
+    }
+    if data.get("initial_passwords"):
+        st.session_state.admin_initial_passwords = data["initial_passwords"]
+    st.session_state.admin_preview = None
+    st.session_state.admin_upload_files = []
+    st.session_state.admin_uploader_sig = ()
+    st.session_state.admin_uploader_n = st.session_state.get("admin_uploader_n", 0) + 1
+
+
+def _cancel_preview() -> None:
+    st.session_state.admin_preview = None
+
+
+def _dismiss(key: str) -> None:
+    st.session_state.pop(key, None)
+
+
+def _render_one_time_passwords(key: str, title: str) -> None:
+    rows = st.session_state.get(key)
+    if not rows:
+        return
+    st.warning(
+        f"{title} 이 목록은 지금 한 번만 보입니다. 서버에는 원문이 저장되지 않으니 "
+        "CSV로 내려받거나 사원에게 바로 전달하세요."
+    )
+    st.dataframe(
+        [
+            {"사번": r["employee_id"], "이름": r.get("name", ""), "초기 비밀번호": r["initial_password"]}
+            for r in rows
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+    cols = st.columns([1, 1, 3])
+    cols[0].download_button(
+        "CSV 다운로드",
+        data=_csv_bytes(
+            rows, [("employee_id", "사번"), ("name", "이름"), ("initial_password", "초기 비밀번호")]
+        ),
+        file_name="initial_passwords.csv",
+        mime="text/csv",
+        key=f"{key}_csv",
+        on_click="ignore",
+    )
+    cols[1].button("확인했습니다", key=f"{key}_dismiss", on_click=_dismiss, args=(key,))
+
+
+def _admin_data_tab(agent: OfficeGenieAgent, auth: dict, info: dict) -> None:
+    ttl = int(info.get("cache_ttl_seconds") or 0)
+    if not info["has_data"]:
+        st.info("아직 회사 데이터가 없습니다. 데이터 관리에서 업로드하세요.")
+    counts = info.get("counts") or {}
+    metric_cols = st.columns(6)
+    for col, (key, label) in zip(
+        metric_cols,
+        (
+            ("policies", "규정"),
+            ("employees", "사원"),
+            ("locations", "장소"),
+            ("handovers", "인수인계서"),
+            ("equipment", "신청 가능 비품"),
+            ("tickets", "신청 내역"),
+        ),
+    ):
+        col.metric(label, counts.get(key, 0))
+
+    applied = st.session_state.pop("admin_applied", None)
+    if applied:
+        st.success(
+            f"반영했습니다 (데이터 버전 {applied['data_version']}). "
+            f"챗봇 답변에는 최대 {applied.get('cache_ttl_seconds', ttl)}초 안에 반영됩니다."
+        )
+    _render_one_time_passwords("admin_initial_passwords", "새로 만든 사원 초기 비밀번호입니다.")
+
+    st.markdown("#### 1. 양식 다운로드")
+    st.caption("필드 설명과 예시 1건이 들어 있습니다. 예시를 지우고 회사 내용으로 채워 올리세요.")
+    template_cols = st.columns(len(DATA_KINDS))
+    for col, (kind, label) in zip(template_cols, DATA_KINDS):
+        payload = _template_bytes(kind)
+        if payload is not None:
+            col.download_button(
+                f"{label} 양식",
+                data=payload,
+                file_name=f"{kind}.json",
+                mime="application/json",
+                key=f"template_{kind}",
+                on_click="ignore",
+            )
+
+    st.markdown("#### 2. 파일 올리기")
+    st.caption(
+        "policies.json · employees.json · locations.json · handovers.json · tickets.json 중 "
+        "하나 또는 여러 개를 올리세요. 파일당 2MB 이하. 올린 종류만 바뀌고 나머지는 그대로입니다. "
+        "비품·신청 규칙을 올려도 기존 신청 내역과 신청 번호는 바뀌지 않습니다."
+    )
+    uploaded = st.file_uploader(
+        "회사 데이터 JSON",
+        type=["json"],
+        accept_multiple_files=True,
+        key=f"admin_uploader_{st.session_state.get('admin_uploader_n', 0)}",
+    )
+    _collect_upload_files(uploaded)
+    local_issues = st.session_state.get("admin_upload_local_issues") or []
+    if local_issues:
+        st.error("올릴 수 없는 파일이 있습니다.")
+        _issues_table(local_issues)
+    files = st.session_state.get("admin_upload_files") or []
+    if files:
+        st.caption("선택한 파일: " + ", ".join(f["name"] for f in files))
+    st.button(
+        "미리보기",
+        key="admin_preview_button",
+        disabled=not files,
+        on_click=_admin_preview,
+        args=(agent, auth),
+    )
+
+    problem = st.session_state.get("admin_preview_issues")
+    if problem:
+        st.error(problem["message"])
+        if problem["issues"]:
+            _issues_table(problem["issues"])
+
+    preview = st.session_state.get("admin_preview")
+    if preview:
+        data = preview["data"]
+        st.markdown("#### 3. 변경 미리보기")
+        st.info(
+            "아직 반영되지 않았습니다. 내용을 확인한 뒤 '반영하기'를 누르세요. "
+            f"반영 후 챗봇 답변에는 최대 {data.get('cache_ttl_seconds', ttl)}초 안에 반영됩니다."
+        )
+        st.dataframe(
+            [
+                {
+                    "종류": c["label"],
+                    "추가": c["added"],
+                    "수정": c["updated"],
+                    "삭제": c["removed"],
+                    "변경 없음": c["unchanged"],
+                    "설정 변경": "예" if c["settings_changed"] else "-",
+                }
+                for c in data["changes"]
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+        for change in data["changes"]:
+            ids = [
+                ("추가", change["added_ids"]),
+                ("수정", change["updated_ids"]),
+                ("삭제", change["removed_ids"]),
+            ]
+            if any(values for _, values in ids):
+                with st.expander(f"{change['label']} 변경 항목 ID"):
+                    for label, values in ids:
+                        if values:
+                            st.markdown(f"**{label}**: " + ", ".join(_escape(v) for v in values))
+        if data.get("initial_passwords_to_create"):
+            st.caption(
+                f"비밀번호가 없는 새 사원 {data['initial_passwords_to_create']}명은 "
+                "반영할 때 4자리 초기 비밀번호가 만들어집니다."
+            )
+        cols = st.columns([1, 1, 4])
+        cols[0].button(
+            "반영하기",
+            key="admin_apply_button",
+            type="primary",
+            on_click=_admin_apply,
+            args=(agent, auth),
+        )
+        cols[1].button("취소", key="admin_cancel_preview", on_click=_cancel_preview)
+
+
+def _admin_employees_tab(agent: OfficeGenieAgent, auth: dict) -> None:
+    result = _admin(agent, auth, "ui_admin_list_employees")
+    if not result.get("ok"):
+        st.error(result.get("message") or "사원 목록을 불러오지 못했습니다.")
+        return
+    people = result["data"]["employees"]
+    if not people:
+        st.info("등록된 사원이 없습니다. 데이터 관리에서 사원(employees.json)을 올려 주세요.")
+        return
+    departments = sorted({p["department"] for p in people})
+    cols = st.columns([1, 2])
+    department = cols[0].selectbox("부서", ["전체", *departments], key="admin_emp_dept")
+    query = cols[1].text_input("이름·사번 검색", key="admin_emp_query").strip().lower()
+    filtered = [
+        p
+        for p in people
+        if (department == "전체" or p["department"] == department)
+        and (not query or query in p["name"].lower() or query in p["employee_id"].lower())
+    ]
+    rows = [
+        {
+            "사번": p["employee_id"],
+            "이름": p["name"],
+            "부서": p["department"],
+            "직급": p.get("position") or "-",
+            "직무": p.get("job_title") or "-",
+            "잔여 연차": "-" if p.get("remaining_days") is None else p["remaining_days"],
+            "계정 상태": p["account_status_label"],
+        }
+        for p in filtered
+    ]
+    st.caption(f"{len(rows)}명 · 행을 선택하면 상세 정보를 볼 수 있습니다.")
+    event = st.dataframe(
+        rows,
+        hide_index=True,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="admin_emp_table",
+    )
+    selected_rows = list(getattr(getattr(event, "selection", None), "rows", []) or [])
+    if not selected_rows or selected_rows[0] >= len(filtered):
+        return
+    employee_id = filtered[selected_rows[0]]["employee_id"]
+    detail = _admin(agent, auth, "ui_admin_employee_detail", employee_id=employee_id)
+    if not detail.get("ok"):
+        st.error(detail.get("message") or "사원 정보를 불러오지 못했습니다.")
+        return
+    data = detail["data"]
+    employee = data["employee"]
+    st.markdown(f"#### {_escape(employee.get('name'))} ({_escape(employee.get('employee_id'))})")
+    info_rows = [
+        ("부서", employee.get("department")),
+        ("직급", employee.get("position") or "-"),
+        ("직무", employee.get("job_title") or "-"),
+        ("재직 상태", employee.get("employment_status") or "-"),
+        ("업무 메일", employee.get("work_email") or "-"),
+        ("계정 상태", data.get("account_status_label")),
+    ]
+    st.dataframe(
+        [{"항목": k, "값": str(v)} for k, v in info_rows],
+        hide_index=True,
+        use_container_width=True,
+    )
+    leave = data.get("annual_leave") or {}
+    leave_cols = st.columns(3)
+    leave_cols[0].metric("잔여 연차", leave.get("remaining_days", "-"))
+    leave_cols[1].metric("부여", leave.get("granted_days", "-"))
+    leave_cols[2].metric("사용", leave.get("used_days", "-"))
+    st.markdown("**신청 내역**")
+    if data["tickets"]:
+        st.dataframe(
+            [
+                {
+                    "티켓 번호": t.get("ticket_id"),
+                    "품목": t.get("item"),
+                    "수량": t.get("quantity"),
+                    "상태": t.get("status"),
+                    "신청일": _short_time(t.get("created_at")),
+                }
+                for t in data["tickets"]
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.caption("신청 내역이 없습니다.")
+    st.markdown("**소속 부서 인수인계서**")
+    if not data["handovers"]:
+        st.caption("등록된 인수인계서가 없습니다.")
+    for handover in data["handovers"]:
+        with st.expander(handover.get("title") or handover.get("handover_id")):
+            for heading, items in (handover.get("summary") or {}).items():
+                st.markdown(f"**{_escape(heading)}**")
+                if isinstance(items, list):
+                    st.markdown("\n".join(f"- {_escape(i)}" for i in items))
+                else:
+                    st.markdown(_escape(items))
+
+
+def _admin_change_ticket(agent: OfficeGenieAgent, auth: dict) -> None:
+    ticket_id = st.session_state.get("admin_ticket_pick")
+    to_status = st.session_state.get("admin_ticket_next")
+    note = st.session_state.get("admin_ticket_note", "")
+    if not ticket_id or not to_status:
+        return
+    result = _admin(
+        agent, auth, "ui_admin_update_ticket", ticket_id=ticket_id, to_status=to_status, note=note
+    )
+    st.session_state.admin_ticket_result = (bool(result.get("ok")), result.get("message", ""))
+    if result.get("ok"):
+        st.session_state.admin_ticket_note = ""
+
+
+def _admin_tickets_tab(agent: OfficeGenieAgent, auth: dict) -> None:
+    result = _admin(agent, auth, "ui_admin_list_tickets")
+    if not result.get("ok"):
+        st.error(result.get("message") or "신청 내역을 불러오지 못했습니다.")
+        return
+    tickets = result["data"]["tickets"]
+    outcome = st.session_state.pop("admin_ticket_result", None)
+    if outcome:
+        (st.success if outcome[0] else st.error)(outcome[1])
+    if not tickets:
+        st.info("아직 신청 내역이 없습니다.")
+        return
+    statuses = ["전체", *dict.fromkeys(t["status"] for t in tickets)]
+    departments = ["전체", *sorted({t["department"] for t in tickets})]
+    cols = st.columns(2)
+    status = cols[0].selectbox("상태", statuses, key="admin_ticket_status_filter")
+    department = cols[1].selectbox("부서", departments, key="admin_ticket_dept_filter")
+    filtered = [
+        t
+        for t in tickets
+        if (status == "전체" or t["status"] == status)
+        and (department == "전체" or t["department"] == department)
+    ]
+    st.dataframe(
+        [
+            {
+                "티켓 번호": t["ticket_id"],
+                "신청자": f"{t['name']} ({t['employee_id']})",
+                "부서": t["department"],
+                "품목": t["item"],
+                "수량": t["quantity"],
+                "상태": t["status"],
+                "신청일": _short_time(t["created_at"]),
+            }
+            for t in filtered
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    changeable = [t for t in tickets if t["allowed_next"]]
+    st.markdown("#### 상태 변경")
+    st.caption("접수완료 → 검토중 → 승인 → 지급완료 순서로만 바꿀 수 있습니다. 반려는 사유가 필요합니다.")
+    if not changeable:
+        st.caption("상태를 바꿀 수 있는 신청이 없습니다.")
+        return
+    by_id = {t["ticket_id"]: t for t in changeable}
+    cols = st.columns([2, 1, 2])
+    picked = cols[0].selectbox(
+        "신청",
+        list(by_id),
+        format_func=lambda tid: f"{tid} · {by_id[tid]['name']} · {by_id[tid]['item']} ({by_id[tid]['status']})",
+        key="admin_ticket_pick",
+    )
+    ticket = by_id[picked]
+    cols[1].selectbox("바꿀 상태", ticket["allowed_next"], key="admin_ticket_next")
+    cols[2].text_input("메모 (반려 시 사유 필수)", key="admin_ticket_note")
+    st.button(
+        "상태 변경",
+        key="admin_ticket_apply",
+        type="primary",
+        on_click=_admin_change_ticket,
+        args=(agent, auth),
+    )
+    if ticket["history"]:
+        with st.expander(f"{picked} 변경 이력"):
+            st.dataframe(
+                [
+                    {
+                        "시각": _short_time(h.get("at")),
+                        "처리자": h.get("by"),
+                        "이전": h.get("from"),
+                        "이후": h.get("to"),
+                        "메모": h.get("note") or "",
+                    }
+                    for h in ticket["history"]
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+
+def _admin_account_action(agent: OfficeGenieAgent, auth: dict, action: str) -> None:
+    employee_id = st.session_state.get("admin_account_pick")
+    if not employee_id:
+        return
+    tool = "ui_admin_reset_password" if action == "reset" else "ui_admin_unlock_account"
+    result = _admin(agent, auth, tool, employee_id=employee_id)
+    st.session_state.admin_account_result = (bool(result.get("ok")), result.get("message", ""))
+    if result.get("ok") and action == "reset":
+        names = {a["employee_id"]: a["name"] for a in st.session_state.get("admin_accounts_cache", [])}
+        st.session_state.admin_reset_passwords = [
+            {
+                "employee_id": employee_id,
+                "name": names.get(employee_id, ""),
+                "initial_password": result["data"]["initial_password"],
+            }
+        ]
+
+
+def _admin_accounts_tab(agent: OfficeGenieAgent, auth: dict) -> None:
+    outcome = st.session_state.pop("admin_account_result", None)
+    if outcome:
+        (st.success if outcome[0] else st.error)(outcome[1])
+    _render_one_time_passwords("admin_reset_passwords", "초기화한 비밀번호입니다.")
+    result = _admin(agent, auth, "ui_admin_list_accounts")
+    if not result.get("ok"):
+        st.error(result.get("message") or "계정 목록을 불러오지 못했습니다.")
+        return
+    accounts = result["data"]["accounts"]
+    st.session_state.admin_accounts_cache = [
+        {"employee_id": a["employee_id"], "name": a["name"]} for a in accounts
+    ]
+    st.markdown("#### 사원 계정")
+    if accounts:
+        st.dataframe(
+            [
+                {
+                    "사번": a["employee_id"],
+                    "이름": a["name"],
+                    "부서": a["department"],
+                    "상태": a["account_status_label"],
+                    "연속 실패": a["failed_count"],
+                    "잠금 해제 시각": _short_time(a["locked_until"]) if a["locked_until"] else "-",
+                }
+                for a in accounts
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+        active = [a for a in accounts if a["account_status"] != "disabled"]
+        if active:
+            labels = {a["employee_id"]: f"{a['employee_id']} {a['name']} ({a['account_status_label']})" for a in active}
+            st.selectbox("사원 선택", list(labels), format_func=labels.get, key="admin_account_pick")
+            cols = st.columns([1, 1, 3])
+            cols[0].button(
+                "비밀번호 초기화",
+                key="admin_reset_button",
+                on_click=_admin_account_action,
+                args=(agent, auth, "reset"),
+            )
+            cols[1].button(
+                "잠금 해제",
+                key="admin_unlock_button",
+                on_click=_admin_account_action,
+                args=(agent, auth, "unlock"),
+            )
+            st.caption("초기화하면 새 4자리 비밀번호가 한 번만 보이고, 사원은 다음 로그인 때 비밀번호를 바꿔야 합니다.")
+    else:
+        st.info("사원 계정이 없습니다. 데이터 관리에서 사원(employees.json)을 올려 주세요.")
+
+    st.markdown("#### 관리자 비밀번호 변경")
+    with st.form("admin_password_form", clear_on_submit=True):
+        old = st.text_input("현재 비밀번호", type="password", key="admin_pw_old")
+        new = st.text_input("새 비밀번호 (8자 이상)", type="password", key="admin_pw_new")
+        again = st.text_input("새 비밀번호 확인", type="password", key="admin_pw_again")
+        submitted = st.form_submit_button("변경")
+    if submitted:
+        if new != again:
+            st.error("새 비밀번호와 확인 값이 다릅니다.")
+        else:
+            changed = agent.change_password(auth["company_id"], auth["account_id"], old, new)
+            (st.success if changed.get("ok") else st.error)(changed.get("message", ""))
+
+
+def _render_admin(agent: OfficeGenieAgent, auth: dict) -> None:
+    _render_logout_button()
+    with st.container(key="admin_root"):
+        st.markdown(
+            "<div class='admin-header'>"
+            "<span class='brand-name'>오피스 지니</span>"
+            "<span class='brand-subtitle'>회사 관리</span>"
+            f"<span class='header-user'>관리자 · {_escape(auth.get('company_name'))}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        overview = _admin(agent, auth, "ui_admin_overview")
+        if not overview.get("ok"):
+            st.error(overview.get("message") or "사내 시스템 연결이 일시적으로 원활하지 않습니다.")
+            return
+        info = overview["data"]
+        code_cols = st.columns([2, 3])
+        with code_cols[0]:
+            st.markdown(
+                "<div class='company-code-label'>회사 코드 · 사원들에게 알려주세요</div>"
+                f"<div class='company-code-big'>{_escape(info['company_code'])}</div>",
+                unsafe_allow_html=True,
+            )
+        with code_cols[1]:
+            st.caption("복사")
+            st.code(info["company_code"], language=None)
+        data_tab, employees_tab, tickets_tab, accounts_tab = st.tabs(
+            ["데이터 관리", "사원", "신청 관리", "계정"]
+        )
+        with data_tab:
+            _admin_data_tab(agent, auth, info)
+        with employees_tab:
+            _admin_employees_tab(agent, auth)
+        with tickets_tab:
+            _admin_tickets_tab(agent, auth)
+        with accounts_tab:
+            _admin_accounts_tab(agent, auth)
+
+
+def main() -> None:
+    _render_styles()
+
+    if _session_expired():
+        _logout("30분 동안 사용하지 않아 로그아웃되었습니다. 다시 로그인해 주세요.")
+
+    auth = st.session_state.get("auth")
+    if not auth:
+        view = st.session_state.get("auth_view", "login")
+        if view == "register":
+            _render_register()
+        elif view == "registered":
+            _render_registered()
+        else:
+            _render_login()
+        return
+
+    try:
+        _touch_activity()
+        _idle_watch()
+        if auth.get("must_change"):
+            _render_change_password(auth)
+            return
+
+        agent = get_agent()
+        if auth.get("role") == "admin":
+            _render_admin(agent, auth)
+        else:
+            _render_employee(agent, auth)
+    except (RerunException, StopException):
+        raise
+    except Exception as exc:
+        # 로그인 이후 화면 오류를 "로그인 실패"처럼 보이게 하지 않는다.
+        _log_post_login_failure("render", exc, auth)
+        _render_post_login_error()
 
 main()

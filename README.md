@@ -5,13 +5,13 @@
 **중소기업 신규 입사자를 위한 온보딩 홈페이지 + MCP 서버**
 
 "점심 식대 한도랑 내 남은 연차 며칠이야?" 한 문장이면 사내 규정, 내 인사 정보, 사무실 위치, 인수인계서, 비품 신청까지 끝.<br>
-JSON 데이터 5종을 DB로 가져오기만 하면 **코드 수정 없이 어느 회사에나** 적용됩니다.
+**회사 등록 → 데이터 업로드 → 사원에게 회사 코드 전달**, 이 세 단계면 코드 수정 없이 바로 사용합니다.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-4.x-6E56CF)
 ![LLM](https://img.shields.io/badge/LLM-Jitda%20API-111827)
 ![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?logo=streamlit&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-73%20passed-2EA043)
+![Tests](https://img.shields.io/badge/tests-131%20passed-2EA043)
 
 <img src="docs/images/dashboard.png" alt="오피스지니 대시보드" width="860">
 
@@ -31,13 +31,14 @@ JSON 데이터 5종을 DB로 가져오기만 하면 **코드 수정 없이 어�
 
 ## 🧭 누가 어떻게 쓰나요?
 
-설치는 관리자가 한 번만 합니다. 직원은 **주소로 접속만** 하면 됩니다.
+서비스는 운영자가 한 번 배포합니다. 회사는 **웹에서 등록하고 데이터만 올리면** 되고, 직원은 **회사 코드 + 사번 + 비밀번호로 로그인**만 하면 됩니다.
 
 | 누가 | 어떻게 | 가이드 |
 |---|---|---|
-| 👩‍💼 **직원** | 브라우저로 사내 주소에 접속해 챗봇과 대화 | **[직원 가이드 →](docs/guide-employee.md)** |
+| 👩‍💼 **직원** | 회사 코드 · 사번 · 비밀번호로 로그인해 대시보드와 챗봇 사용 | **[직원 가이드 →](docs/guide-employee.md)** |
+| 🏢 **회사 관리자** | 회사 등록 → 회사 코드 확인 → 양식대로 규정·사원 데이터 업로드 → 미리보기 → 반영, 신청·계정 관리 | **[관리자 가이드 1부 →](docs/guide-admin.md#1부-회사-관리자)** |
 | 🤖 **AI 앱 사용자** | 쓰고 있는 AI 앱(Claude Code, Cursor 등)에 MCP 서버 연결 | **[AI 앱 연결 가이드 →](docs/guide-mcp.md)** |
-| 🛠 **관리자** | 서버 설치, 회사 데이터 등록, 주소 · 토큰 배포 | **[관리자 가이드 →](docs/guide-admin.md)** |
+| 🛠 **서비스 운영자** | 서버 배포, 가입 코드 설정, 운영 스크립트 · 토큰 배포 | **[관리자 가이드 2부 →](docs/guide-admin.md#2부-서비스-운영자)** |
 
 두 입구는 같은 MCP 서버와 같은 회사 데이터를 씁니다. 어디로 들어와도 권한 규칙과 신청 내역이 똑같이 적용됩니다.
 
@@ -50,7 +51,8 @@ JSON 데이터 5종을 DB로 가져오기만 하면 **코드 수정 없이 어�
 | 📍 | 사내 장소 안내 | "대회의실 어디야?" |
 | 📂 | 소속 부서 인수인계서 요약 | "1주 차에 뭐 해야 해?" |
 | 🎫 | 비품 · 계정 신청 (확인 후 발급) | "듀얼 모니터 1대 신청해 줘" |
-| 🏢 | 다기업 지원 (데이터 폴더만 추가) | A사 식대 12,000원 · B사 15,000원 |
+| 🏢 | 다기업 지원 (회사 등록 + 데이터 업로드) | A사 식대 12,000원 · B사 15,000원 |
+| 🔐 | 회사 코드 로그인 · 관리자 화면 | 업로드 미리보기 · 신청 승인 · 계정 잠금 해제 |
 
 ## 🚀 빠른 시작
 
@@ -59,9 +61,11 @@ git clone https://github.com/Byun-Gwan-Young/OG.git officegenie && cd officegeni
 python -m venv .venv && source .venv/bin/activate   # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp env.example .env                                  # LLM_API_KEY, LLM_BASE_URL (선택: DATABASE_URL) 입력
-python scripts/import_company.py --all               # 회사 JSON → DB (DATABASE_URL이 없으면 로컬 SQLite)
-streamlit run app.py
+python scripts/import_company.py --all               # 시연 회사 JSON → DB (DATABASE_URL이 없으면 로컬 SQLite), 회사 코드 출력
+streamlit run app.py                                 # 회사 코드 + EMP001 + data/의 비밀번호로 로그인
 ```
+
+새 회사는 로그인 화면의 **"회사 등록하기"** 로 만들고, 관리자 화면에서 데이터를 올리면 됩니다. 시연 회사의 관리자 계정은 `python scripts/set_admin_password.py bridgesoft`로 만듭니다.
 
 자세한 설치, MCP 서버 실행, 토큰 발급, 문제 해결은 [관리자 가이드](docs/guide-admin.md)를 보세요.
 

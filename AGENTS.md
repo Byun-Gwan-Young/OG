@@ -3,11 +3,14 @@
 중소기업 신규 입사자용 온보딩 에이전트. Jitda LLM API(jitda-chat, OpenAI-compatible) + FastMCP(stdio) + Streamlit + 회사별 JSON 5종.
 
 ## 파일과 담당
-- `mcp_server.py` — MCP 툴 (테크 리드). LLM용 5개 + `ui_` 접두사 UI 전용 4개
+- `mcp_server.py` — MCP 툴 (테크 리드). LLM용 5개 + `ui_` 접두사 UI 전용(로그인·등록·사이드바·티켓 확정·`ui_admin_*`)
 - `agent.py` — Jitda LLM API ↔ MCP 연결, 세션 값 주입 (테크 리드)
 - `app.py` — Streamlit UI (UI 담당). `agent.py`만 import한다
-- `storage.py` — DB 저장소 (SQLAlchemy Core, PostgreSQL(Neon)/SQLite). 서버의 모든 데이터 접근은 여기로만
-- `scripts/import_company.py` — 회사 JSON 검증 → DB 가져오기, `--all`, `--reset-tickets`, `--yes`
+- `storage.py` — DB 저장소 (SQLAlchemy Core, PostgreSQL(Neon)/SQLite). 서버의 모든 데이터 접근은 여기로만. 회사 코드·계정(`accounts`)·감사 로그(`audit_log`)도 여기
+- `company_data.py` — 회사 문서 5종 검증·업로드 해석·변경 비교 (파일·DB 접근 없음). import_company.py와 관리자 업로드가 같이 씀
+- `templates/` — 관리자 화면 업로드 양식 5종 (필드 설명 + 일반화한 예시 1건)
+- `scripts/import_company.py` — 회사 JSON 검증 → DB 가져오기, `--all`, `--reset-tickets`, `--reset-employee-passwords`, `--yes`. 회사 코드 출력
+- `scripts/list_companies.py`, `scripts/set_admin_password.py` — 운영자용 회사 코드 확인, ADMIN 비밀번호 설정
 - `data/<company_id>/` — policies, employees, locations, handovers, tickets (데이터·QA 담당). DB 가져오기 원본
 - `seed/` — 시연 초기화용 tickets.json 원본
 - `docs/ui_contract.md` — app.py ↔ agent.py 규격. **반환 형식을 바꾸면 이 문서도 같이 고친다**
@@ -22,6 +25,9 @@
 7. 파이썬 예외를 UI로 올리지 않는다. agent 메서드는 항상 ChatResult dict를 돌려준다.
 8. 서버 코드는 JSON 파일을 직접 읽거나 쓰지 않는다. 데이터 접근은 storage.py로만. 테스트는 DATABASE_URL(공유 DB)에 연결하지 않는다.
 9. 커밋 메시지에 Co-Authored-By 등 AI 관련 문구를 넣지 않는다.
+10. 로그인·관리자·등록·업로드 툴은 LLM_TOOLS에 넣지 않는다. 관리자 권한은 서버에서 accounts로 다시 확인한다.
+    비밀번호는 해시로만 저장하고 어떤 응답에도 포함하지 않는다(예외: 새로 만든 초기 비밀번호를 관리자에게 한 번만 보여 주는 응답).
+    업로드 데이터는 항상 로그인한 관리자의 회사로만 반영한다.
 
 ## 확인 기준 (PRD)
 - 정상 1: bridgesoft/EMP001 "점심 식대 한도랑 내 남은 연차 며칠이야?" → 12,000원(복리후생 규정 제4조), 잔여 11일
@@ -29,12 +35,16 @@
 - 예외 1: "사내 수면실 위치", "재무회계팀 인수인계서", "EMP002 연차" → 고정 차단 문구
 - 예외 2: 공백 입력 / MCP 서버 중단 → 경고 또는 "사내 시스템 연결이 일시적으로 원활하지 않습니다"
 - 다기업: nextwave로 바꾸면 식대 15,000원, 모니터 한도 1대
+- 로그인: 회사 코드 + EMP001 + data/의 비밀번호 → 본인 대시보드. 틀린 회사 코드·아이디·비밀번호는 같은 문구, 5회 실패 시 10분 잠금
+- 관리자: 회사 등록 → 회사 코드 표시 → ADMIN 로그인 → 업로드 미리보기(DB 불변) → 반영 후 search_policy 결과 변경
 
 ## 명령
-- 테스트: `pytest -q` (LLM 없이 실행됨, 원본 data/를 건드리지 않음)
+- 테스트: `pytest -q --durations=10` (LLM 없이 실행됨, 원본 data/를 건드리지 않음). PostgreSQL은 `@pytest.mark.pg` 테스트만, 전부는 `--pg-all`. 정적 데이터를 바꾸는 테스트에는 `@pytest.mark.reimport`
 - 터미널 채팅: `python scripts/cli_chat.py bridgesoft EMP001` (`LLM_API_KEY`, `LLM_BASE_URL` 필요)
 - 데이터 가져오기: `python scripts/import_company.py --all` (`DATABASE_URL` 없으면 로컬 SQLite)
 - 티켓 초기화: `python scripts/import_company.py --all --reset-tickets`
+- 시연용 사원 비밀번호 초기화(employees.json 값, ADMIN 제외): `python scripts/import_company.py --all --reset-employee-passwords`
+- 회사 코드 확인 / 관리자 비밀번호: `python scripts/list_companies.py`, `python scripts/set_admin_password.py <company_id>`
 
 ## Jitda API 보안 및 호환 규칙
 - API 키는 서버의 `LLM_API_KEY`에서 읽고 브라우저로 전달하지 않는다.

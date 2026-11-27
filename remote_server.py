@@ -170,10 +170,6 @@ TOOLS_DOC = [
 def render_home(base: str) -> str:
     url = f"{base}/mcp"
     e = html.escape
-    companies = "".join(
-        f"<li><b>{e(c['company_name'])}</b><code>{e(c['company_id'])}</code></li>"
-        for c in (core.ui_list_companies().get("data") or {}).get("companies", [])
-    )
     tools = "".join(
         f'<div class="tool"><div class="ico">{i}</div><div><div class="tn">{e(t)}</div>'
         f'<code>{e(n)}</code><div class="td">{e(d)}</div></div></div>'
@@ -241,8 +237,7 @@ footer{{margin-top:64px;color:var(--mut);font-size:13px;border-top:1px solid var
 
 <h2>제공하는 툴</h2><div class="grid">{tools}</div>
 
-<h2>연결된 회사</h2><ul class="co">{companies}</ul>
-<p class="mut" style="font-size:14px">회사 데이터(JSON 5종) 폴더만 추가하면 코드 수정 없이 새 회사가 연결됩니다.</p>
+<p class="mut" style="font-size:14px">회사 목록은 공개하지 않습니다. 토큰이 가리키는 회사의 데이터만 조회됩니다.</p>
 
 <h2>안전장치</h2><div class="sec">
 <div><b>🔑 토큰 = 신원</b>툴 인자에 사번이 없습니다. 다른 사람 정보를 지정할 방법 자체가 없습니다.</div>
@@ -273,11 +268,12 @@ async def home(request: Request) -> HTMLResponse:
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> JSONResponse:
     try:
-        companies = core.list_company_ids()
+        company_count = len(core.list_company_ids())
         status = "ok"
     except core.storage.StorageUnavailable:
-        companies, status = [], "db_unavailable"
-    return JSONResponse({"status": status, "companies": companies,
+        company_count, status = 0, "db_unavailable"
+    # 회사 ID 목록은 공개하지 않는다(멀티테넌트). 개수만 알린다.
+    return JSONResponse({"status": status, "company_count": company_count,
                          "tokens_loaded": len(load_tokens())})
 
 

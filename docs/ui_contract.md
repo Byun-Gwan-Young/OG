@@ -25,26 +25,42 @@ def get_agent():
 
 ## 2. 화면별 호출 함수
 
-### 2-1. 상단 드롭다운 (회사 → 사번)
+### 2-1. 로그인 · 비밀번호 변경 · 회사 등록
+
+회사 목록·사원 목록 조회(`ui_list_companies`, `ui_list_employees`)는 **없앴다.** 신원은 로그인으로만 정한다.
 
 ```python
-agent.list_companies()
-# → {"ok": True, "code": "OK", "data": {"companies": [
-#      {"company_id": "bridgesoft", "company_name": "(주)브릿지소프트"},
-#      {"company_id": "nextwave",   "company_name": "(주)넥스트웨이브"}]}}
+agent.login(company_code, account_id, password)   # 회사 코드: 대소문자·앞뒤 공백 무시
+# 사원 → {"ok": True, "code": "OK", "data": {
+#   "company_id": "bridgesoft", "company_name": "(주)브릿지소프트", "role": "employee",
+#   "employee_id": "EMP001", "name": "김신입", "department": "백엔드개발팀",
+#   "position": "사원" | None, "must_change": False}}
+# 관리자 → {"ok": True, "data": {"company_id": ..., "company_name": ..., "role": "admin",
+#   "account_id": "ADMIN", "must_change": False}}
+# 실패 → {"ok": False, "code": "LOGIN_FAILED",
+#   "message": "회사 코드, 아이디 또는 비밀번호가 올바르지 않습니다."}   # 무엇이 틀렸는지 구분 안 함
+# 5회 연속 실패 → {"ok": False, "code": "ACCOUNT_LOCKED", "message": "... 10분간 잠겼습니다 ..."}
 
-agent.list_employees("bridgesoft")
-# → {"ok": True, "data": {"employees": [
-#      {"employee_id": "EMP001", "name": "김신입", "department": "백엔드개발팀",
-#       "position": "사원", "label": "EMP001 김신입 / 백엔드개발팀"}, ...]}}
+agent.change_password(company_id, account_id, old_password, new_password)
+# 성공 PASSWORD_CHANGED / 실패 PASSWORD_WRONG · PASSWORD_TOO_SHORT(사원 4자, 관리자 8자) ·
+#      PASSWORD_SAME · ACCOUNT_LOCKED · INVALID_SESSION
+
+agent.signup_settings()
+# → {"ok": True, "data": {"signup_code_required": bool}}   # 가입 코드 값은 돌려주지 않음
+
+agent.register_company(company_name, admin_password, signup_code="")
+# → {"ok": True, "code": "REGISTERED", "data": {"company_id": "c_…", "company_name": "…",
+#      "company_code": "MHUGS5", "account_id": "ADMIN"}}
+# 실패 코드: SIGNUP_CODE_INVALID · COMPANY_NAME_INVALID · ADMIN_PASSWORD_SHORT
 ```
 
-- 드롭다운 표시는 `label`, 내부 값은 `company_id` / `employee_id`를 쓴다.
-- **회사나 사번이 바뀌면 새 세션을 만들고 채팅 기록을 비운다.**
+- 로그인 응답의 `company_id`, `account_id`/`employee_id`, `role`은 **`st.session_state["auth"]`에만** 저장한다. URL 쿼리·입력으로 바꿀 수 있는 경로를 만들지 않는다.
+- `must_change=True`면 비밀번호 변경 화면을 먼저 보여 준다.
+- 로그아웃·30분 무동작 시 `st.session_state`를 전부 지운다(대화 포함).
+- 사원 로그인 후 새 채팅 세션을 만든다.
 
 ```python
-st.session_state.chat = agent.new_session(company_id, employee_id)
-st.session_state.messages = []
+st.session_state.chat = agent.new_session(auth["company_id"], auth["employee_id"])
 ```
 
 ### 2-2. 우측 사이드바 (잔여 연차 + 신청 현황판)
@@ -52,6 +68,7 @@ st.session_state.messages = []
 ```python
 agent.get_sidebar(company_id, employee_id)
 # → {"ok": True, "data": {
+#      "company_name": "(주)브릿지소프트",
 #      "employee": {"employee_id": "EMP001", "name": "김신입", "department": "백엔드개발팀", "position": "사원"},
 #      "annual_leave": {"remaining_days": 11, "granted_days": 15, "used_days": 4, "as_of": "2026-11-20"},
 #      "tickets": [   # 본인 티켓만, 최신순
@@ -60,7 +77,7 @@ agent.get_sidebar(company_id, employee_id)
 ```
 
 - 현황판 표 컬럼 제안: `티켓 번호 | 구분 | 품목 | 수량 | 상태 | 신청일`
-- 상태 값은 5개 고정: `접수완료`, `검토중`, `승인`, `반려`, `지급완료`
+- 상태 값은 5개 고정: `접수완료`, `검토중`, `승인`, `반려`, `지급완료` (`승인`은 대시보드에 "지급 예정"으로 표시)
 - **다시 불러오는 시점**: 응답의 `tickets_changed`가 `True`일 때 (아래 3장)
 
 ### 2-3. 채팅 입력
@@ -87,6 +104,32 @@ if result["pending_ticket"]:
 
 - 사용자가 채팅창에 "네", "접수해줘", "취소"라고 답해도 같은 동작을 한다.
 - 버튼을 연달아 눌러도 10초 안의 같은 신청은 티켓이 하나만 생긴다.
+
+---
+
+### 2-5. 관리자 화면 (`role == "admin"`)
+
+모든 관리자 호출은 `agent.admin_call(툴 이름, company_id, actor_account_id, **인자)` 하나로 한다. 서버가 매번 `accounts`에서 `role=admin`인지 다시 확인하고, 아니면 `{"ok": False, "code": "PERMISSION_DENIED", "message": "관리자만 사용할 수 있는 기능입니다."}`를 준다(받으면 로그아웃). 항상 로그인한 관리자 회사의 데이터만 다룬다.
+
+| 툴 | 추가 인자 | 성공 `data` |
+|---|---|---|
+| `ui_admin_overview` | - | `company_id, company_name, company_code, data_version, counts{policies, employees, locations, handovers, equipment, tickets}, has_data, cache_ttl_seconds` |
+| `ui_admin_preview_upload` | `files=[{"name", "content"}]` | `base_version, fingerprint, kinds, changes[{kind, label, added, updated, removed, unchanged, added_ids, updated_ids, removed_ids, settings_changed}], initial_passwords_to_create, cache_ttl_seconds`. **DB는 바꾸지 않는다** |
+| `ui_admin_apply_upload` | `files, base_version, fingerprint` (미리보기 값 그대로) | `data_version, changes, initial_passwords[{employee_id, name, initial_password}], cache_ttl_seconds` |
+| `ui_admin_list_employees` | - | `employees[{employee_id, name, department, position, job_title, remaining_days, account_status, account_status_label}]` |
+| `ui_admin_employee_detail` | `employee_id` | `employee, annual_leave, tickets, handovers[{handover_id, title, last_updated, summary}], account_status, account_status_label` |
+| `ui_admin_list_tickets` | - | `tickets[{ticket_id, employee_id, name, department, type, item, quantity, purpose, status, created_at, history, allowed_next}]` (최신순) |
+| `ui_admin_update_ticket` | `ticket_id, to_status, note=""` | `ticket` (위와 같은 형태) |
+| `ui_admin_list_accounts` | - | `accounts[{employee_id, name, department, account_status, account_status_label, failed_count, locked_until}]` |
+| `ui_admin_reset_password` | `employee_id` | `{employee_id, initial_password}` (새 4자리, `must_change=True`) |
+| `ui_admin_unlock_account` | `employee_id` | `None` |
+
+- 업로드 `files`는 메모리의 텍스트다(파일로 저장하지 않음). 종류는 파일 이름(`policies.json` 등)이나 내용의 목록 키로 정한다. 파일당 2MB, JSON만.
+- 업로드 실패: `UPLOAD_EMPTY`, `UPLOAD_INVALID`(`data.issues[{file, item, field, problem, message}]`), `UPLOAD_STALE`(미리보기 이후 데이터·파일이 바뀜 → 다시 미리보기).
+- 티켓 상태: `접수완료 → 검토중 → 승인 → 지급완료`, `반려`는 접수완료·검토중·승인에서만(사유 필수). 실패 코드 `INVALID_TRANSITION`, `NOTE_REQUIRED`, `NOT_FOUND`.
+- 관리자 비밀번호 변경은 `agent.change_password(company_id, "ADMIN", old, new)`.
+- **비밀번호 원문이 응답에 들어가는 곳은 `ui_admin_apply_upload.initial_passwords`와 `ui_admin_reset_password.initial_password` 두 곳뿐이다.** 화면에 한 번만 보여 주고(CSV 다운로드 가능) 저장하지 않는다. 해시·솔트는 어디에도 나오지 않는다.
+- 로그인·등록·관리자 툴은 `LLM_TOOLS`에 넣지 않는다.
 
 ---
 
@@ -145,12 +188,21 @@ from agent import OfficeGenieAgent
 
 agent = get_agent()   # 1장 참고
 
-companies = agent.list_companies()["data"]["companies"]
-company = st.selectbox("회사", companies, format_func=lambda c: c["company_name"])
-emps = agent.list_employees(company["company_id"])["data"]["employees"]
-emp = st.selectbox("사번", emps, format_func=lambda e: e["label"])
+auth = st.session_state.get("auth")
+if not auth:
+    with st.form("login"):
+        code = st.text_input("회사 코드")
+        account = st.text_input("아이디")
+        password = st.text_input("비밀번호", type="password")
+        if st.form_submit_button("로그인"):
+            r = agent.login(code, account, password)
+            if r["ok"]:
+                st.session_state.auth = r["data"]
+                st.rerun()
+            st.error(r["message"])
+    st.stop()
 
-key = (company["company_id"], emp["employee_id"])
+key = (auth["company_id"], auth["employee_id"])
 if st.session_state.get("key") != key:
     st.session_state.key = key
     st.session_state.chat = agent.new_session(*key)

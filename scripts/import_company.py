@@ -6,6 +6,8 @@ DB 주소는 storage.py가 .env의 DATABASE_URL에서 읽는다(없으면 로컬
     python scripts/import_company.py --all                  # 모든 회사
     python scripts/import_company.py data/bridgesoft        # 한 회사
     python scripts/import_company.py --all --reset-tickets  # 티켓을 seed로 초기화
+    python scripts/import_company.py --all --reset-employee-passwords
+        # 시연용: 사원 계정 비밀번호를 employees.json 값으로 되돌림(ADMIN 제외)
 """
 
 from __future__ import annotations
@@ -19,12 +21,13 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import company_data  # noqa: E402
 import storage  # noqa: E402
 
 
 DATA_ROOT = ROOT / "data"
 SEED_ROOT = ROOT / "seed"
-JSON_NAMES = ("policies", "employees", "locations", "handovers", "tickets")
+JSON_NAMES = company_data.DOC_KINDS
 
 
 class ImportValidationError(ValueError):
@@ -47,39 +50,6 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def _require_fields(
-    record: Any, required: tuple[str, ...], file_name: str, collection: str, index: int
-) -> None:
-    label = f"{file_name}: {collection} 항목 {index}"
-    if not isinstance(record, dict):
-        raise ImportValidationError(f"{label}은 객체여야 합니다.")
-    missing = [key for key in required if key not in record or record[key] is None]
-    if missing:
-        raise ImportValidationError(
-            f"{label}에 필수 필드가 없습니다: {', '.join(missing)}"
-        )
-
-
-def _require_list(document: dict, key: str, file_name: str) -> list:
-    value = document.get(key)
-    if not isinstance(value, list):
-        raise ImportValidationError(f"{file_name}: {key}는 배열이어야 합니다.")
-    return value
-
-
-def _check_unique(
-    records: list[dict], key: str, file_name: str, collection: str
-) -> None:
-    seen: set[str] = set()
-    for index, record in enumerate(records, 1):
-        value = str(record[key])
-        if value in seen:
-            raise ImportValidationError(
-                f"{file_name}: {collection} 항목 {index}에서 중복 {key}={value}"
-            )
-        seen.add(value)
-
-
 def validate_documents(
     company_id: str, documents: dict[str, dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
@@ -97,115 +67,11 @@ def validate_documents(
                 f"{name}.json: company_id가 폴더 이름 {company_id!r}과 일치하지 않습니다."
             )
 
-    policies_doc = documents["policies"]
-    policy_rows = _require_list(policies_doc, "policies", "policies.json")
-    _require_fields(
-        policies_doc.get("search_policy_config"),
-        ("preferred_policy_type",),
-        "policies.json",
-        "search_policy_config",
-        1,
-    )
-    for index, row in enumerate(policy_rows, 1):
-        _require_fields(
-            row,
-            ("id", "category", "article", "title", "content"),
-            "policies.json",
-            "policies",
-            index,
-        )
-        if "keywords" in row and not isinstance(row["keywords"], list):
-            raise ImportValidationError(
-                f"policies.json: policies 항목 {index}의 keywords는 배열이어야 합니다."
-            )
-    _check_unique(policy_rows, "id", "policies.json", "policies")
-
-    employees_rows = _require_list(
-        documents["employees"], "employees", "employees.json"
-    )
-    for index, row in enumerate(employees_rows, 1):
-        _require_fields(
-            row,
-            ("employee_id", "name", "department", "annual_leave"),
-            "employees.json",
-            "employees",
-            index,
-        )
-        if not isinstance(row["annual_leave"], dict):
-            raise ImportValidationError(
-                f"employees.json: employees 항목 {index}의 annual_leave는 객체여야 합니다."
-            )
-    _check_unique(employees_rows, "employee_id", "employees.json", "employees")
-    # position is deliberately optional; password is deliberately ignored by storage.
-
-    locations_rows = _require_list(
-        documents["locations"], "locations", "locations.json"
-    )
-    if not isinstance(
-        documents["locations"].get("explicitly_not_registered", []), list
-    ):
-        raise ImportValidationError(
-            "locations.json: explicitly_not_registered는 배열이어야 합니다."
-        )
-    for index, row in enumerate(locations_rows, 1):
-        _require_fields(
-            row,
-            ("location_id", "name", "building", "floor", "zone"),
-            "locations.json",
-            "locations",
-            index,
-        )
-    _check_unique(locations_rows, "location_id", "locations.json", "locations")
-
-    handover_rows = _require_list(documents["handovers"], "handovers", "handovers.json")
-    for index, row in enumerate(handover_rows, 1):
-        _require_fields(
-            row,
-            ("handover_id", "department", "title", "summary"),
-            "handovers.json",
-            "handovers",
-            index,
-        )
-        if not isinstance(row["summary"], dict):
-            raise ImportValidationError(
-                f"handovers.json: handovers 항목 {index}의 summary는 객체여야 합니다."
-            )
-    _check_unique(handover_rows, "handover_id", "handovers.json", "handovers")
-
-    tickets_doc = documents["tickets"]
-    ticket_rows = _require_list(tickets_doc, "tickets", "tickets.json")
-    if "next_sequence" not in tickets_doc:
-        raise ImportValidationError("tickets.json: next_sequence 필드가 없습니다.")
-    try:
-        if int(tickets_doc["next_sequence"]) < 1:
-            raise ValueError
-    except (TypeError, ValueError):
-        raise ImportValidationError(
-            "tickets.json: next_sequence는 1 이상의 정수여야 합니다."
-        ) from None
-    if not isinstance(tickets_doc.get("creation_rule"), dict):
-        raise ImportValidationError("tickets.json: creation_rule은 객체여야 합니다.")
-    equipment_rows = _require_list(tickets_doc, "allowed_equipment", "tickets.json")
-    for index, row in enumerate(ticket_rows, 1):
-        _require_fields(
-            row,
-            (
-                "ticket_id",
-                "employee_id",
-                "type",
-                "item",
-                "quantity",
-                "status",
-                "created_at",
-            ),
-            "tickets.json",
-            "tickets",
-            index,
-        )
-    _check_unique(ticket_rows, "ticket_id", "tickets.json", "tickets")
-    for index, row in enumerate(equipment_rows, 1):
-        _require_fields(row, ("item",), "tickets.json", "allowed_equipment", index)
-    _check_unique(equipment_rows, "item", "tickets.json", "allowed_equipment")
+    # 관리자 업로드와 같은 검증 함수(company_data.validate_document)를 쓴다.
+    for name in JSON_NAMES:
+        issues = company_data.validate_document(name, documents[name], mode="import")
+        if issues:
+            raise ImportValidationError(issues[0]["message"])
     return documents
 
 
@@ -229,23 +95,9 @@ def load_seed_tickets(
         raise ImportValidationError(
             f"{seed_path.name}: company_id가 대상 회사 {company_id!r}과 일치하지 않습니다."
         )
-    rows = _require_list(document, "tickets", seed_path.name)
-    for index, row in enumerate(rows, 1):
-        _require_fields(
-            row,
-            (
-                "ticket_id",
-                "employee_id",
-                "type",
-                "item",
-                "quantity",
-                "status",
-                "created_at",
-            ),
-            seed_path.name,
-            "tickets",
-            index,
-        )
+    for issue in company_data.validate_document("tickets", document, mode="import"):
+        if issue["field"] in ("tickets",) or "tickets 항목" in issue["message"]:
+            raise ImportValidationError(issue["message"].replace("tickets.json", seed_path.name, 1))
     return document
 
 
@@ -277,7 +129,10 @@ def _company_directories() -> list[Path]:
 
 
 def _confirm_cloud_import(
-    companies: list[tuple[str, dict[str, dict]]], reset: bool, yes: bool
+    companies: list[tuple[str, dict[str, dict]]],
+    reset: bool,
+    yes: bool,
+    reset_passwords: bool = False,
 ) -> bool:
     if storage.database_is_sqlite() or yes:
         return True
@@ -290,12 +145,24 @@ def _confirm_cloud_import(
     )
     print(f"대상 DB 호스트(비밀번호 제외): {host}")
     print(f"회사: {company_labels}")
+    if reset_passwords:
+        operation += " + 사원 비밀번호를 employees.json 값으로 초기화(ADMIN 제외)"
     print(f"작업 내용: {operation}")
     try:
         answer = input("계속 진행할까요? [y/N] ").strip().lower()
     except EOFError:
         return False
     return answer in {"y", "yes"}
+
+
+def _print_initial_passwords(rows: list[dict]) -> None:
+    """password가 없던 사원의 새 초기 비밀번호. DB에는 원문을 남기지 않으므로 지금만 보인다."""
+    if not rows:
+        return
+    print(f"  새 초기 비밀번호 {len(rows)}건 (지금만 표시됩니다. 사원에게 전달하세요):")
+    print("  사번\t이름\t초기 비밀번호")
+    for row in rows:
+        print(f"  {row['employee_id']}\t{row['name']}\t{row['initial_password']}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -310,6 +177,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--reset-tickets", action="store_true", help="각 회사 티켓을 seed 상태로 초기화"
+    )
+    parser.add_argument(
+        "--reset-employee-passwords",
+        action="store_true",
+        help=(
+            "시연용: 사원 계정 비밀번호를 employees.json 값으로 되돌리고 "
+            "잠금·실패 횟수 초기화 (ADMIN 제외)"
+        ),
     )
     parser.add_argument(
         "--yes", action="store_true", help="클라우드 DB 확인 프롬프트 생략"
@@ -339,7 +214,9 @@ def main(argv: list[str] | None = None) -> int:
                 load_seed_tickets(company_id)
             prepared = [(company_id, documents)]
 
-        if not _confirm_cloud_import(prepared, args.reset_tickets, args.yes):
+        if not _confirm_cloud_import(
+            prepared, args.reset_tickets, args.yes, args.reset_employee_passwords
+        ):
             print("취소했습니다. DB는 변경하지 않았습니다.")
             return 1
 
@@ -358,8 +235,16 @@ def main(argv: list[str] | None = None) -> int:
                 f"가져오기 완료: {company_id} "
                 f"(data_version={result['data_version']}, 티켓 {result['ticket_count']}건)"
             )
+            print(f"  {result['company_name']} / 회사 코드 {result['company_code']}")
+            _print_initial_passwords(result.get("initial_passwords") or [])
             if result["ticket_action"] == "preserved":
                 print("티켓은 기존 DB 상태 유지(초기화하려면 --reset-tickets)")
+            if args.reset_employee_passwords:
+                changed = storage.reset_employee_passwords(
+                    company_id, documents["employees"].get("employees") or []
+                )
+                # 비밀번호 값은 출력하지 않는다.
+                print(f"  사원 비밀번호 초기화: {changed}명")
         return 0
     except (ImportValidationError, storage.StorageUnavailable, ValueError) as exc:
         print(f"가져오기 중단: {exc}", file=sys.stderr)

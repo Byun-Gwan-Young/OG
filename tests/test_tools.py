@@ -176,10 +176,3 @@ def test_company_b_uses_its_own_rules():
     assert s.create_support_ticket("모니터", B, "EMP001", quantity=2)["code"] == "REJECTED"
     # B사 EMP001은 무선 키보드 검토중 → 키보드 추가는 거절
     assert s.create_support_ticket("키보드", B, "EMP001")["code"] == "REJECTED"
-
-
-def test_ui_lists():
-    companies = s.ui_list_companies()["data"]["companies"]
-    assert {c["company_id"] for c in companies} == {A, B}
-    emps = s.ui_list_employees(A)["data"]["employees"]
-    assert emps[0]["label"] == "EMP001 김신입 / 백엔드개발팀"

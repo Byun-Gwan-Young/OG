@@ -1,0 +1,31 @@
+{
+  "_안내": {
+    "설명": "사내 장소 목록입니다. 목록에 없는 장소는 챗봇이 '등록되지 않은 정보'로 답합니다.",
+    "locations[].location_id": "(필수) 장소 고유 ID",
+    "locations[].name": "(필수) 장소 이름. 부서 위치라면 부서명과 같게 쓰세요.",
+    "locations[].building": "(필수) 건물",
+    "locations[].floor": "(필수) 층(정수)",
+    "locations[].zone": "(필수) 구역",
+    "locations[].aliases": "(선택) 다른 이름 배열",
+    "locations[].guide": "(선택) 찾아가는 방법",
+    "explicitly_not_registered": "(선택) 없다고 분명히 안내할 장소 이름 배열"
+  },
+  "locations": [
+    {
+      "location_id": "LOC-001",
+      "name": "대회의실",
+      "aliases": [
+        "큰 회의실"
+      ],
+      "building": "본관",
+      "floor": 3,
+      "zone": "A구역",
+      "guide": "본관 3층 엘리베이터에서 왼쪽",
+      "access": "전 직원",
+      "capacity": 12
+    }
+  ],
+  "explicitly_not_registered": [
+    "사내 수면실"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "_안내": {
+    "설명": "사원 목록입니다. 사원은 회사 코드 + employee_id(사번) + 비밀번호로 로그인합니다.",
+    "employees[].employee_id": "(필수) 사번. 로그인 아이디가 됩니다.",
+    "employees[].name": "(필수) 이름",
+    "employees[].department": "(필수) 부서명. 인수인계서·부서 위치와 같은 이름을 쓰세요.",
+    "employees[].annual_leave": "(필수) 연차 객체. remaining_days(잔여), granted_days(부여), used_days(사용), as_of(기준일)",
+    "employees[].position": "(선택) 직급. 없으면 화면에서 숨깁니다.",
+    "employees[].job_title": "(선택) 직무",
+    "employees[].password": "(선택) 초기 비밀번호 4자 이상. 비워 두면 4자리 초기 비밀번호를 만들어 반영 직후 한 번만 보여줍니다. 이미 계정이 있는 사원은 바뀌지 않습니다.",
+    "주의": "목록에서 빠진 사원의 계정은 삭제되지 않고 로그인만 막힙니다."
+  },
+  "employees": [
+    {
+      "employee_id": "EMP001",
+      "name": "홍길동",
+      "department": "개발팀",
+      "position": "사원",
+      "job_title": "주니어 개발자",
+      "employment_status": "재직",
+      "onboarding_week": 1,
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 0,
+        "remaining_days": 15,
+        "as_of": "2026-01-02"
+      },
+      "password": ""
+    }
+  ]
+}

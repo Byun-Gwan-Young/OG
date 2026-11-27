@@ -143,7 +143,7 @@ def test_server_unavailable(tmp_path):
         r = agent.new_session("bridgesoft", "EMP001").send("안녕")
         assert r["code"] == "SERVER_UNAVAILABLE"
         assert "Traceback" not in r["reply"]
-        assert agent.list_companies()["code"] == "SERVER_UNAVAILABLE"
+        assert agent.login("ABCDEF", "EMP001", "0000")["code"] == "SERVER_UNAVAILABLE"
     finally:
         agent.close()
 
@@ -171,3 +171,22 @@ def test_llm_hang_times_out(make_agent, monkeypatch):
     a._llm = lambda **k: asyncio.wait_for(hanging_llm(**k), timeout=agent_mod.LLM_TIMEOUT_SEC)
     r = a.new_session("bridgesoft", "EMP001").send("식대 한도")
     assert r["code"] in {"FALLBACK", "LLM_UNAVAILABLE"} and r["debug"]
+
+
+@pytest.mark.reimport
+def test_agent_restarts_mcp_subprocess_when_server_code_changes(make_agent):
+    """화면(캐시된 agent)만 옛 서버 코드로 로그인을 검증하던 문제 방지."""
+    import storage
+
+    storage.reset_employee_passwords("bridgesoft", [{"employee_id": "EMP001", "password": "0899"}])
+    code = storage.get_company("bridgesoft")["company_code"]
+    agent = make_agent(ScriptedLLM({}))
+    assert agent.login(code, "EMP001", "0899")["ok"]
+    first = agent._client
+    assert agent.login(code, "EMP001", "0899")["ok"]
+    assert agent._client is first  # 코드가 그대로면 같은 프로세스를 쓴다
+
+    real_stamp = agent._server_code_stamp
+    agent._server_code_stamp = lambda: real_stamp() + (("changed", 1),)
+    assert agent.login(code, "EMP001", "0899")["ok"]
+    assert agent._client is not first

@@ -76,6 +76,7 @@ def test_employees_store_no_password():
     assert any("password" in e for e in source["employees"])
 
 
+@pytest.mark.reimport
 def test_position_is_optional(tmp_path):
     company = _copy_company(tmp_path)
     _edit_json(company / "employees.json", lambda d: d["employees"][0].pop("position", None))
@@ -114,6 +115,8 @@ def test_tool_envelope_and_expected_values():
 
 # ---- 재가져오기와 티켓 정책 ------------------------------------------------------
 
+@pytest.mark.pg
+@pytest.mark.reimport
 def test_reimport_keeps_ticket_state_and_number(capsys):
     created = s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)["data"]["ticket"]
     storage.update_ticket_status(A, created["ticket_id"], "승인")
@@ -131,6 +134,8 @@ def test_reimport_keeps_ticket_state_and_number(capsys):
     assert s.ui_confirm_ticket(A, "EMP001", "Slack", 1, request_type="계정")["data"]["ticket"]["ticket_id"] == "REQ-005"
 
 
+@pytest.mark.pg
+@pytest.mark.reimport
 def test_reset_tickets_numbering():
     for item in ("Slack", "Notion"):
         s.ui_confirm_ticket(A, "EMP001", item, 1, request_type="계정")  # REQ-004, REQ-005
@@ -143,6 +148,8 @@ def test_reset_tickets_numbering():
     assert _count(storage.tickets, B) == 3
 
 
+@pytest.mark.pg
+@pytest.mark.reimport
 def test_tickets_initialized_from_json_only_when_empty():
     storage.recreate_tables_for_tests()
     import_company.import_company_directory(ROOT / "data" / A)
@@ -151,6 +158,7 @@ def test_tickets_initialized_from_json_only_when_empty():
     assert _company_row(A)["next_ticket_sequence"] == 6
 
 
+@pytest.mark.reimport
 def test_policy_removed_from_json_is_removed_from_db(tmp_path):
     company = _copy_company(tmp_path)
     _edit_json(company / "policies.json",
@@ -162,6 +170,7 @@ def test_policy_removed_from_json_is_removed_from_db(tmp_path):
     assert _count(storage.policies, B) == 120
 
 
+@pytest.mark.pg
 def test_import_failure_rolls_back_everything(tmp_path):
     before = (_company_row(A)["data_version"], _count(storage.policies, A), _count(storage.employees, A))
     _, documents = import_company.load_company_directory(ROOT / "data" / A)
@@ -184,6 +193,7 @@ def test_invalid_json_syntax_reports_file_and_line(tmp_path):
     assert "policies.json" in str(err.value) and "2행" in str(err.value)
 
 
+@pytest.mark.pg
 def test_missing_field_reports_item_number_and_db_untouched(tmp_path, capsys):
     company = _copy_company(tmp_path)
     _edit_json(company / "employees.json", lambda d: d["employees"][2].pop("name"))
@@ -216,6 +226,7 @@ def _expire_cache(company_id):
     storage._companies_cache[company_id]["checked_at"] -= storage.STATIC_CACHE_TTL_SECONDS + 1
 
 
+@pytest.mark.reimport
 def test_cache_refreshes_only_when_data_version_changes():
     original = _policy_content(A, "BS-103")
 
@@ -249,6 +260,7 @@ def test_tickets_are_never_cached():
 
 # ---- 동시 발급 -------------------------------------------------------------------
 
+@pytest.mark.pg
 def test_concurrent_ticket_creation_has_unique_numbers():
     results, errors = [], []
 
@@ -270,6 +282,7 @@ def test_concurrent_ticket_creation_has_unique_numbers():
     assert _company_row(A)["next_ticket_sequence"] == 14
 
 
+@pytest.mark.pg
 def test_duplicate_within_ten_seconds_is_ignored():
     first = s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)
     second = s.ui_confirm_ticket(A, "EMP001", "노트북 거치대", 1)
@@ -287,6 +300,7 @@ def test_roundtrips_logged_at_debug(caplog):
     assert any("DB roundtrips tool=search_policy count=" in r.getMessage() for r in caplog.records)
 
 
+@pytest.mark.pg
 def test_unreachable_db_returns_server_unavailable_without_leaking(fresh_db, caplog):
     secret_user, secret_pw = "leakcheckuser", "leakcheck-pw-9813"
     bad_url = f"postgresql://{secret_user}:{secret_pw}@127.0.0.1:1/officegenie"
@@ -306,6 +320,7 @@ def test_unreachable_db_returns_server_unavailable_without_leaking(fresh_db, cap
         storage.configure_database(fresh_db["url"], schema=fresh_db["schema"])
 
 
+@pytest.mark.pg
 def test_database_url_normalization_and_guards(monkeypatch):
     url = storage.normalize_database_url("postgresql://u:p@ep-x-pooler.example.neon.tech/db")
     assert url.drivername == "postgresql+psycopg" and url.query["sslmode"] == "require"

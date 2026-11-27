@@ -284,6 +284,7 @@ class OfficeGenieAgent:
         self.base_url = (base_url or os.environ.get("LLM_BASE_URL", "")).strip()
         self._llm = llm  # 테스트용 주입. None이면 서버 측 Jitda API 사용
         self._client: Client | None = None
+        self._server_stamp: tuple | None = None
         self._tool_decls: list[dict] | None = None
         self._lock = None  # asyncio.Lock (루프 스레드에서 생성)
         self._loop = asyncio.new_event_loop()
@@ -311,12 +312,40 @@ class OfficeGenieAgent:
             self._loop.call_soon_threadsafe(self._loop.stop)
 
     # ---- MCP 연결 ----------------------------------------------------------
+    def _server_code_stamp(self) -> tuple:
+        """MCP 하위 프로세스가 실행하는 서버 코드의 수정 시각.
+
+        Streamlit은 get_agent()를 캐시해 하위 프로세스를 오래 살려 둔다. 서버 코드가
+        바뀐 뒤에도 옛 프로세스가 옛 storage.py로 로그인을 검증하면, CLI·직접 호출은
+        성공하는데 화면에서만 실패하는 일이 생긴다. 코드가 바뀌면 다시 띄운다.
+        """
+        stamp = []
+        for path in (
+            self.server_path,
+            self.server_path.parent / "storage.py",
+            self.server_path.parent / "company_data.py",
+        ):
+            try:
+                stamp.append((path.name, path.stat().st_mtime_ns))
+            except OSError:
+                stamp.append((path.name, None))
+        return tuple(stamp)
+
     async def _connect(self) -> Client:
         if self._lock is None:
             self._lock = asyncio.Lock()
         async with self._lock:
+            stamp = self._server_code_stamp()
             if self._client is not None and self._client.is_connected():
-                return self._client
+                if stamp == self._server_stamp:
+                    return self._client
+                log.info("MCP server code changed; restarting subprocess")
+                try:
+                    await self._client.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                self._client = None
+                self._tool_decls = None
             transport = PythonStdioTransport(
                 script_path=str(self.server_path),
                 env=self._env,
@@ -329,6 +358,7 @@ class OfficeGenieAgent:
             except Exception as e:
                 raise ServerUnavailable(str(e)) from e
             self._client = client
+            self._server_stamp = stamp
             return client
 
     async def _call(self, name: str, args: dict, _retry: bool = True) -> dict:
@@ -385,11 +415,52 @@ class OfficeGenieAgent:
             }
 
     # ---- UI 편의 메서드 ------------------------------------------------------
-    def list_companies(self) -> dict:
-        return self.call_tool("ui_list_companies")
+    def login(self, company_code: str, account_id: str, password: str) -> dict:
+        return self.call_tool(
+            "ui_login",
+            {
+                "company_code": company_code or "",
+                "account_id": account_id or "",
+                "password": password or "",
+            },
+        )
 
-    def list_employees(self, company_id: str) -> dict:
-        return self.call_tool("ui_list_employees", {"company_id": company_id})
+    def admin_call(self, name: str, company_id: str, actor_account_id: str, **args) -> dict:
+        """관리자 툴 공통 호출. 신원은 로그인 세션 값으로만 채운다."""
+        if not name.startswith("ui_admin_"):
+            raise ValueError("관리자 툴 이름이 아닙니다.")
+        return self.call_tool(
+            name,
+            {"company_id": company_id, "actor_account_id": actor_account_id, **args},
+        )
+
+    def signup_settings(self) -> dict:
+        return self.call_tool("ui_signup_settings")
+
+    def register_company(
+        self, company_name: str, admin_password: str, signup_code: str = ""
+    ) -> dict:
+        return self.call_tool(
+            "ui_register_company",
+            {
+                "company_name": company_name or "",
+                "admin_password": admin_password or "",
+                "signup_code": signup_code or "",
+            },
+        )
+
+    def change_password(
+        self, company_id: str, account_id: str, old_password: str, new_password: str
+    ) -> dict:
+        return self.call_tool(
+            "ui_change_password",
+            {
+                "company_id": company_id,
+                "account_id": account_id,
+                "old_password": old_password or "",
+                "new_password": new_password or "",
+            },
+        )
 
     def get_sidebar(self, company_id: str, employee_id: str) -> dict:
         return self.call_tool(
@@ -634,15 +705,7 @@ class ChatSession:
                 False, side.get("code", "INVALID_SESSION"), side.get("message", "")
             )
         me = side["data"]["employee"]
-        companies = await self.agent._call("ui_list_companies", {})
-        company = next(
-            (
-                c["company_name"]
-                for c in (companies.get("data") or {}).get("companies", [])
-                if c["company_id"] == self.company_id
-            ),
-            self.company_id,
-        )
+        company = side["data"].get("company_name") or self.company_id
         system = _system_prompt(company, me)
         decls = await self.agent._llm_tool_decls()
 

@@ -1,0 +1,34 @@
+{
+  "_안내": {
+    "설명": "비품·신청 규칙입니다. 올려도 기존 신청 내역과 신청 번호는 바뀌지 않습니다.",
+    "allowed_equipment[].item": "(필수) 신청 가능한 품목 이름",
+    "allowed_equipment[].aliases": "(선택) 다른 이름 배열",
+    "allowed_equipment[].max_quantity_per_employee": "(선택) 1인당 최대 수량(1 이상 정수)",
+    "allowed_equipment[].policy_reference": "(선택) 근거 규정",
+    "creation_rule": "(필수) 신청 규칙 객체. unknown_equipment_message(목록에 없는 품목 안내), excess_quantity_message(수량 초과 안내)",
+    "status_values": "(선택) 상태 이름 배열"
+  },
+  "allowed_equipment": [
+    {
+      "item": "모니터",
+      "aliases": [
+        "보조 모니터"
+      ],
+      "max_quantity_per_employee": 2,
+      "policy_reference": "비품관리 규정 제3조",
+      "quantity_limit_defined": true
+    }
+  ],
+  "creation_rule": {
+    "initial_status": "접수완료",
+    "unknown_equipment_message": "신청할 수 없는 품목입니다. 사내 비품 규정에 등록되어 있지 않습니다.",
+    "excess_quantity_message": "비품 신청 가능 수량을 초과했습니다."
+  },
+  "status_values": [
+    "접수완료",
+    "검토중",
+    "승인",
+    "반려",
+    "지급완료"
+  ]
+}

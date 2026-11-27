@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import logging
 import os
 import re
@@ -31,6 +32,7 @@ from typing import Any, Literal
 
 from fastmcp import FastMCP
 
+import company_data
 import storage
 
 # ---------------------------------------------------------------------------
@@ -48,11 +50,36 @@ MSG = {
         "본인 정보 및 소속 부서 문서만 조회 가능하며, "
         "추가 문의는 인사총무팀 공식 메일로 연락해 주세요."
     ),
-    "INVALID_SESSION": "선택한 회사 또는 사번 정보를 확인할 수 없습니다. 화면 상단에서 다시 선택해 주세요.",
+    "INVALID_SESSION": "로그인 정보를 확인할 수 없습니다. 다시 로그인해 주세요.",
     "INVALID_INPUT": "요청 내용을 이해하지 못했습니다. 조금 더 구체적으로 입력해 주세요.",
     "INVALID_QUANTITY": "신청 수량은 1 이상의 숫자로 입력해 주세요.",
     "NEEDS_CONFIRMATION": "아래 내용으로 신청을 접수할까요? 확인하시면 티켓이 발급됩니다.",
     "SERVER_UNAVAILABLE": "사내 시스템 연결이 일시적으로 원활하지 않습니다. 잠시 후 다시 시도해 주세요.",
+    # 로그인: 무엇이 틀렸는지(회사 코드/아이디/비밀번호) 구분하지 않는다.
+    "LOGIN_FAILED": "회사 코드, 아이디 또는 비밀번호가 올바르지 않습니다.",
+    "LOGIN_LOCKED": (
+        "로그인에 5회 연속 실패해 10분간 잠겼습니다. 잠시 후 다시 시도하거나 회사 관리자에게 문의하세요."
+    ),
+    "PASSWORD_WRONG": "현재 비밀번호가 올바르지 않습니다.",
+    "PASSWORD_SAME": "새 비밀번호는 이전 비밀번호와 달라야 합니다.",
+    "PASSWORD_CHANGED": "비밀번호를 변경했습니다.",
+    "SIGNUP_CODE_INVALID": "서비스 가입 코드가 올바르지 않습니다. 서비스 운영자에게 받은 코드를 입력해 주세요.",
+    "COMPANY_NAME_INVALID": "회사명을 1자 이상 100자 이하로 입력해 주세요.",
+    "ADMIN_PASSWORD_SHORT": "관리자 비밀번호는 8자 이상이어야 합니다.",
+    "ADMIN_ONLY": "관리자만 사용할 수 있는 기능입니다.",
+    "UPLOAD_EMPTY": "올릴 파일을 선택해 주세요.",
+    "UPLOAD_INVALID": "파일에 문제가 있어 미리보기를 만들지 못했습니다. 아래 표를 확인해 주세요.",
+    "UPLOAD_PREVIEW": "변경 내용을 확인한 뒤 '반영하기'를 눌러 주세요. 아직 반영되지 않았습니다.",
+    "UPLOAD_STALE": "미리보기 이후 데이터나 파일이 바뀌었습니다. 다시 미리보기를 만들어 주세요.",
+    "UPLOAD_APPLIED": "반영했습니다.",
+    "TICKET_NOT_FOUND": "신청 내역을 찾을 수 없습니다.",
+    "TICKET_BAD_TRANSITION": "이 상태로는 바꿀 수 없습니다. 접수완료 → 검토중 → 승인 → 지급완료 순서로만 진행됩니다.",
+    "TICKET_NOTE_REQUIRED": "반려할 때는 사유를 입력해 주세요.",
+    "TICKET_UPDATED": "신청 상태를 변경했습니다.",
+    "ACCOUNT_NOT_FOUND": "해당 사원 계정을 찾을 수 없습니다.",
+    "PASSWORD_RESET": "초기 비밀번호를 새로 만들었습니다. 이 화면에서만 한 번 보입니다.",
+    "ACCOUNT_UNLOCKED": "잠금을 해제했습니다.",
+    "COMPANY_REGISTERED": "회사를 등록했습니다. 아래 회사 코드를 사원들에게 알려주세요.",
 }
 
 mcp = FastMCP(
@@ -615,36 +642,475 @@ def create_support_ticket(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool
-@_storage_safe
-def ui_list_companies() -> dict:
-    """[UI 전용] 회사 선택 드롭다운용 목록."""
-    return ok(data={"companies": storage.list_companies()})
+def _password_too_short(role: str) -> str:
+    minimum = (
+        storage.ADMIN_MIN_PASSWORD
+        if role == storage.ROLE_ADMIN
+        else storage.EMPLOYEE_MIN_PASSWORD
+    )
+    return f"새 비밀번호는 {minimum}자 이상이어야 합니다."
+
+
+def _input_shape(value: object) -> str:
+    """입력 형태만 요약한다(값·길이는 남기지 않음). 자동완성·전각 문자·공백 진단용."""
+    text = "" if value is None else str(value)
+    flags = []
+    if not text:
+        return "empty"
+    if text != text.strip():
+        flags.append("surrounding_space")
+    if any(ord(ch) > 127 for ch in text):
+        flags.append("non_ascii")
+    if text.strip().isdigit() and text.strip().isascii():
+        flags.append("ascii_digits")
+    return ",".join(flags) or "other"
+
+
+def _log_login_failure(
+    result: dict, company_code: object, account_id: object, password: object
+) -> None:
+    # 비밀번호·해시·DB 주소는 남기지 않는다. 아이디는 공개 식별자라 그대로 남긴다.
+    log.warning(
+        "login failed reason=%s company_id=%s code_shape=%s account_id=%r password_shape=%s",
+        result.get("reason", "unknown"),
+        result.get("company_id", "-"),
+        _input_shape(company_code),
+        str(account_id or "")[:40],
+        _input_shape(password),
+    )
 
 
 @mcp.tool
 @_storage_safe
-def ui_list_employees(company_id: str) -> dict:
-    """[UI 전용] 사번 선택 드롭다운용 목록."""
-    try:
-        employees = load(company_id, "employees")["employees"]
-    except KeyError:
-        return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+def ui_login(company_code: str, account_id: str, password: str) -> dict:
+    """[UI 전용] 회사 코드 + 아이디(사번 또는 ADMIN) + 비밀번호 로그인."""
+    result = storage.authenticate(company_code, account_id, password)
+    if result["status"] != "ok":
+        _log_login_failure(result, company_code, account_id, password)
+    if result["status"] == "locked":
+        return fail("ACCOUNT_LOCKED", MSG["LOGIN_LOCKED"])
+    if result["status"] != "ok":
+        return fail("LOGIN_FAILED", MSG["LOGIN_FAILED"])
+    company = result["company"]
+    base = {
+        "company_id": company["company_id"],
+        "company_name": company["company_name"],
+        "role": result["role"],
+        "must_change": result["must_change"],
+    }
+    if result["role"] == storage.ROLE_ADMIN:
+        return ok(data={**base, "account_id": storage.ADMIN_ACCOUNT_ID})
+    employee = storage.get_employee(company["company_id"], result["account_id"])
+    if employee is None:
+        log.warning(
+            "login failed reason=account_without_employee company_id=%s account_id=%r",
+            company["company_id"],
+            result["account_id"],
+        )
+        return fail("LOGIN_FAILED", MSG["LOGIN_FAILED"])
     return ok(
         data={
-            "employees": [
-                {
-                    "employee_id": e["employee_id"],
-                    "name": e["name"],
-                    "department": e["department"],
-                    "position": e.get("position"),
-                    "onboarding_week": e.get("onboarding_week"),
-                    "label": f"{e['employee_id']} {e['name']} / {e['department']}",
-                }
-                for e in employees
-            ]
+            **base,
+            "employee_id": employee["employee_id"],
+            "name": employee["name"],
+            "department": employee["department"],
+            "position": employee.get("position") or None,
         }
     )
+
+
+@mcp.tool
+@_storage_safe
+def ui_change_password(
+    company_id: str, account_id: str, old_password: str, new_password: str
+) -> dict:
+    """[UI 전용] 본인 비밀번호 변경. 사원 4자 이상, 관리자 8자 이상."""
+    account = storage.get_account(company_id, account_id)
+    if account is None or account["disabled"]:
+        return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+    status = storage.change_password(company_id, account_id, old_password, new_password)
+    if status == "ok":
+        return ok("PASSWORD_CHANGED", message=MSG["PASSWORD_CHANGED"])
+    if status == "locked":
+        return fail("ACCOUNT_LOCKED", MSG["LOGIN_LOCKED"])
+    if status == "too_short":
+        return fail("PASSWORD_TOO_SHORT", _password_too_short(account["role"]))
+    if status == "same":
+        return fail("PASSWORD_SAME", MSG["PASSWORD_SAME"])
+    return fail("PASSWORD_WRONG", MSG["PASSWORD_WRONG"])
+
+
+def _signup_code() -> str:
+    return os.environ.get("OFFICEGENIE_SIGNUP_CODE", "").strip()
+
+
+@mcp.tool
+def ui_signup_settings() -> dict:
+    """[UI 전용] 회사 등록 화면 설정. 가입 코드 값 자체는 돌려주지 않는다."""
+    return ok(data={"signup_code_required": bool(_signup_code())})
+
+
+@mcp.tool
+@_storage_safe
+def ui_register_company(
+    company_name: str, admin_password: str, signup_code: str = ""
+) -> dict:
+    """[UI 전용] 회사 등록: 회사 코드 자동 생성 + ADMIN 계정 생성. 데이터는 비어 있다."""
+    expected = _signup_code()
+    if expected and not hmac.compare_digest(
+        str(signup_code or "").strip().encode("utf-8"), expected.encode("utf-8")
+    ):
+        return fail("SIGNUP_CODE_INVALID", MSG["SIGNUP_CODE_INVALID"])
+    name = (company_name or "").strip()
+    if not name or len(name) > storage.COMPANY_NAME_MAX:
+        return fail("COMPANY_NAME_INVALID", MSG["COMPANY_NAME_INVALID"])
+    if len(admin_password or "") < storage.ADMIN_MIN_PASSWORD:
+        return fail("ADMIN_PASSWORD_SHORT", MSG["ADMIN_PASSWORD_SHORT"])
+    company = storage.register_company(name, admin_password)
+    log.info("company registered company_id=%s", company["company_id"])
+    return ok("REGISTERED", data=company, message=MSG["COMPANY_REGISTERED"])
+
+
+# ---------------------------------------------------------------------------
+# 관리자 툴 (UI 전용). 화면 분기를 믿지 않고 매번 accounts로 관리자인지 다시 확인한다.
+# 데이터는 항상 인자로 받은 company_id(=로그인한 관리자의 회사)에만 적용한다.
+# ---------------------------------------------------------------------------
+
+
+def _require_admin(company_id: str, actor_account_id: str) -> dict | None:
+    account = storage.get_account(str(company_id or ""), str(actor_account_id or ""))
+    if (
+        account is None
+        or account["role"] != storage.ROLE_ADMIN
+        or account["disabled"]
+    ):
+        log.warning("admin tool denied company_id=%s", company_id)
+        return fail("PERMISSION_DENIED", MSG["ADMIN_ONLY"])
+    return None
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_overview(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 회사 코드, 데이터 종류별 건수, 반영 주기."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    overview = storage.company_overview(company_id)
+    if overview is None:
+        return fail("PERMISSION_DENIED", MSG["ADMIN_ONLY"])
+    storage.record_admin_view(company_id, actor_account_id, "view_overview")
+    return ok(data=overview)
+
+
+def _parse_upload_files(files: Any) -> tuple[dict[str, dict], list[dict]]:
+    """[{name, content}] → (종류별 정규화 문서, 오류 목록). 파일로 저장하지 않는다."""
+    documents: dict[str, dict] = {}
+    issues: list[dict] = []
+    if not isinstance(files, list) or not files:
+        return documents, issues
+    for item in files:
+        if not isinstance(item, dict):
+            issues.append(company_data.issue("upload", "파일 형식을 알 수 없습니다."))
+            continue
+        name = str(item.get("name") or "upload.json")
+        content = item.get("content")
+        if not isinstance(content, str):
+            issues.append(company_data.issue(name, "파일 내용을 읽을 수 없습니다."))
+            continue
+        document, parse_issues = company_data.parse_upload(name, content.encode("utf-8"))
+        if parse_issues:
+            issues.extend(parse_issues)
+            continue
+        kind = company_data.detect_kind(name, document)
+        if kind is None:
+            issues.append(
+                company_data.issue(
+                    name,
+                    "어떤 데이터인지 알 수 없습니다. 파일 이름을 policies.json, employees.json, "
+                    "locations.json, handovers.json, tickets.json 중 하나로 해 주세요.",
+                )
+            )
+            continue
+        if kind in documents:
+            issues.append(company_data.issue(name, f"{kind}.json이 두 번 올라왔습니다."))
+            continue
+        normalized = company_data.normalize_upload(kind, document)
+        kind_issues = company_data.validate_document(kind, normalized, mode="upload")
+        if name != f"{kind}.json":
+            for entry in kind_issues:
+                entry["file"] = name
+                entry["message"] = entry["message"].replace(f"{kind}.json", name, 1)
+        issues.extend(kind_issues)
+        documents[kind] = normalized
+    return documents, issues
+
+
+def _upload_preview(company_id: str, files: Any) -> tuple[dict | None, dict | None]:
+    """(미리보기 데이터, 실패 응답). DB는 바꾸지 않는다."""
+    if not isinstance(files, list) or not files:
+        return None, fail("UPLOAD_EMPTY", MSG["UPLOAD_EMPTY"])
+    documents, issues = _parse_upload_files(files)
+    if issues:
+        return None, fail(
+            "UPLOAD_INVALID", MSG["UPLOAD_INVALID"], data={"issues": issues}
+        )
+    current = storage.current_company_documents(company_id)
+    if current is None:
+        return None, fail("PERMISSION_DENIED", MSG["ADMIN_ONLY"])
+    version, current_docs = current
+    changes = [
+        company_data.diff_document(kind, current_docs[kind], documents[kind])
+        for kind in company_data.DOC_KINDS
+        if kind in documents
+    ]
+    new_accounts = 0
+    if "employees" in documents:
+        new_accounts = sum(
+            1
+            for row in documents["employees"]["employees"]
+            if not row.get("password")
+            and str(row["employee_id"])
+            not in {str(e["employee_id"]) for e in current_docs["employees"]["employees"]}
+        )
+    return {
+        "base_version": version,
+        "fingerprint": company_data.upload_fingerprint(files),
+        "kinds": [c["kind"] for c in changes],
+        "changes": changes,
+        "initial_passwords_to_create": new_accounts,
+        "documents": documents,
+        "current": current_docs,
+    }, None
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_preview_upload(
+    company_id: str, actor_account_id: str, files: list[dict]
+) -> dict:
+    """[UI 전용·관리자] 업로드 파일 검증 + 변경 미리보기. DB는 바꾸지 않는다.
+
+    files: [{"name": "policies.json", "content": "<JSON 텍스트>"}]. 파일 속 company_id는 무시.
+    """
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    preview, error = _upload_preview(company_id, files)
+    if error:
+        return error
+    storage.record_admin_view(company_id, actor_account_id, "upload_preview")
+    return ok(
+        "PREVIEW",
+        data={
+            key: preview[key]
+            for key in (
+                "base_version",
+                "fingerprint",
+                "kinds",
+                "changes",
+                "initial_passwords_to_create",
+            )
+        }
+        | {"cache_ttl_seconds": storage.STATIC_CACHE_TTL_SECONDS},
+        message=MSG["UPLOAD_PREVIEW"],
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_apply_upload(
+    company_id: str,
+    actor_account_id: str,
+    files: list[dict],
+    base_version: int,
+    fingerprint: str,
+) -> dict:
+    """[UI 전용·관리자] 미리보기한 파일을 트랜잭션 하나로 반영하고 data_version을 올린다.
+
+    기존 신청 내역(티켓)과 다음 번호는 바꾸지 않는다. 새로 만든 초기 비밀번호는
+    응답의 initial_passwords로 이번 한 번만 돌려준다(DB에는 해시만 저장).
+    """
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    preview, error = _upload_preview(company_id, files)
+    if error:
+        return error
+    if (
+        preview["fingerprint"] != str(fingerprint or "")
+        or preview["base_version"] != int(base_version or 0)
+    ):
+        return fail("UPLOAD_STALE", MSG["UPLOAD_STALE"])
+    company = storage.get_company(company_id)
+    merged = company_data.merge_documents(preview["current"], preview["documents"])
+    try:
+        result = storage.import_company_documents(
+            company_id,
+            merged,
+            actor=actor_account_id,
+            company_name=company["company_name"],
+            expected_version=preview["base_version"],
+            preserve_tickets=True,
+            audit_action="upload_applied",
+            audit_detail={
+                "kinds": preview["kinds"],
+                "changes": [
+                    {k: c[k] for k in ("kind", "added", "updated", "removed")}
+                    for c in preview["changes"]
+                ],
+            },
+        )
+    except storage.VersionConflict:
+        return fail("UPLOAD_STALE", MSG["UPLOAD_STALE"])
+    return ok(
+        "APPLIED",
+        data={
+            "data_version": result["data_version"],
+            "changes": preview["changes"],
+            "initial_passwords": result.get("initial_passwords") or [],
+            "cache_ttl_seconds": storage.STATIC_CACHE_TTL_SECONDS,
+        },
+        message=MSG["UPLOAD_APPLIED"],
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_employees(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 사원 표: 사번, 이름, 부서, 직급, 직무, 잔여 연차, 계정 상태."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    storage.record_admin_view(company_id, actor_account_id, "view_employees")
+    return ok(data={"employees": storage.admin_list_employees(company_id)})
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_employee_detail(
+    company_id: str, actor_account_id: str, employee_id: str
+) -> dict:
+    """[UI 전용·관리자] 사원 상세: 인사 정보, 연차, 신청 내역, 소속 부서 인수인계서 요약."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    employee = storage.get_employee(company_id, str(employee_id or ""))
+    if employee is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    employee = {k: v for k, v in employee.items() if k != "password"}
+    handovers = [
+        {
+            "handover_id": h.get("handover_id"),
+            "title": h.get("title"),
+            "last_updated": h.get("last_updated"),
+            "summary": h.get("summary") or {},
+        }
+        for h in load(company_id, "handovers")["handovers"]
+        if h.get("department") == employee.get("department")
+    ]
+    account = storage.get_account(company_id, employee["employee_id"])
+    status = account["status"] if account else "none"
+    storage.record_admin_view(
+        company_id, actor_account_id, "view_employee", employee["employee_id"]
+    )
+    return ok(
+        data={
+            "employee": employee,
+            "annual_leave": employee.get("annual_leave") or {},
+            "tickets": storage.get_tickets(company_id, employee["employee_id"]),
+            "handovers": handovers,
+            "account_status": status,
+            "account_status_label": storage.ACCOUNT_STATUS_LABELS[status],
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_tickets(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 신청 관리 표(최신순). 각 티켓에 바꿀 수 있는 다음 상태 포함."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    storage.record_admin_view(company_id, actor_account_id, "view_tickets")
+    return ok(data={"tickets": storage.admin_list_tickets(company_id)})
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_update_ticket(
+    company_id: str,
+    actor_account_id: str,
+    ticket_id: str,
+    to_status: str,
+    note: str = "",
+) -> dict:
+    """[UI 전용·관리자] 신청 상태 변경. 접수완료→검토중→승인→지급완료, 반려는 사유 필수."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    result = storage.admin_update_ticket(
+        company_id, str(ticket_id or ""), str(to_status or ""), actor_account_id, note
+    )
+    if result["status"] == "not_found":
+        return fail("NOT_FOUND", MSG["TICKET_NOT_FOUND"])
+    if result["status"] == "invalid_transition":
+        return fail("INVALID_TRANSITION", MSG["TICKET_BAD_TRANSITION"])
+    if result["status"] == "note_required":
+        return fail("NOTE_REQUIRED", MSG["TICKET_NOTE_REQUIRED"])
+    return ok("UPDATED", data={"ticket": result["ticket"]}, message=MSG["TICKET_UPDATED"])
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_accounts(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 사원 계정 상태 표(정상/잠금/변경 필요/비활성)."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    storage.record_admin_view(company_id, actor_account_id, "view_accounts")
+    return ok(data={"accounts": storage.admin_list_accounts(company_id)})
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_reset_password(
+    company_id: str, actor_account_id: str, employee_id: str
+) -> dict:
+    """[UI 전용·관리자] 사원 비밀번호 초기화(새 4자리, 다음 로그인 때 변경 필요).
+
+    새 비밀번호는 이 응답에서 한 번만 돌려준다.
+    """
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    password = storage.admin_reset_password(
+        company_id, str(employee_id or ""), actor_account_id
+    )
+    if password is None:
+        return fail("NOT_FOUND", MSG["ACCOUNT_NOT_FOUND"])
+    return ok(
+        "PASSWORD_RESET",
+        data={"employee_id": employee_id, "initial_password": password},
+        message=MSG["PASSWORD_RESET"],
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_unlock_account(
+    company_id: str, actor_account_id: str, employee_id: str
+) -> dict:
+    """[UI 전용·관리자] 로그인 실패로 잠긴 사원 계정의 잠금을 푼다."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    if not storage.admin_unlock_account(
+        company_id, str(employee_id or ""), actor_account_id
+    ):
+        return fail("NOT_FOUND", MSG["ACCOUNT_NOT_FOUND"])
+    return ok("UNLOCKED", message=MSG["ACCOUNT_UNLOCKED"])
 
 
 @mcp.tool
@@ -657,8 +1123,10 @@ def ui_get_sidebar(company_id: str, employee_id: str) -> dict:
     tickets = storage.get_tickets(company_id, employee_id)
     tickets.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     leave = me.get("annual_leave", {})
+    company = storage.get_company(company_id) or {}
     return ok(
         data={
+            "company_name": company.get("company_name") or company_id,
             "employee": {
                 "employee_id": me["employee_id"],
                 "name": me["name"],

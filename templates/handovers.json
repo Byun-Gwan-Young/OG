@@ -1,0 +1,31 @@
+{
+  "_안내": {
+    "설명": "부서별 인수인계서입니다. 사원은 자기 부서 문서만 볼 수 있습니다.",
+    "handovers[].handover_id": "(필수) 문서 고유 ID",
+    "handovers[].department": "(필수) 부서명(사원 데이터의 department와 같게)",
+    "handovers[].title": "(필수) 제목",
+    "handovers[].summary": "(필수) 요약 객체. 제목: [항목 배열] 형태",
+    "handovers[].notes": "(선택) 주의 사항 배열",
+    "handovers[].last_updated": "(선택) 마지막 수정일"
+  },
+  "handovers": [
+    {
+      "handover_id": "HND-001",
+      "department": "개발팀",
+      "title": "개발팀 신입사원 1주 차 인수인계서",
+      "last_updated": "2026-01-02",
+      "summary": {
+        "핵심 담당 업무": [
+          "코드 저장소 구조 파악"
+        ],
+        "1주 차 할 일": [
+          "1일 차: 계정·장비 확인"
+        ]
+      },
+      "notes": [
+        "운영 DB는 직접 수정하지 않습니다."
+      ],
+      "access": "해당 부서 직원만"
+    }
+  ]
+}
