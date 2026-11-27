@@ -37,7 +37,7 @@ def _cookie_scripts(headers: dict, monkeypatch) -> list[str]:
 
 
 def test_login_cookie_secure_behind_https_proxy(monkeypatch):
-    scripts = _cookie_scripts({"X-Forwarded-Proto": "https", "Host": "officegenie-web.onrender.com"}, monkeypatch)
+    scripts = _cookie_scripts({"X-Forwarded-Proto": "https", "Host": "officegenie.onrender.com"}, monkeypatch)
     assert scripts and all("SameSite=Strict; Secure" in s for s in scripts)
 
 
@@ -57,8 +57,8 @@ def test_render_blueprint_matches_deploy_contract():
     tomllib = pytest.importorskip("tomllib")
     blueprint = yaml.safe_load((ROOT / "render.yaml").read_text("utf-8"))
     services = {svc["name"]: svc for svc in blueprint["services"]}
-    assert set(services) == {"officegenie-web", "officegenie-mcp"}
-    web, mcp = services["officegenie-web"], services["officegenie-mcp"]
+    assert set(services) == {"officegenie", "officegenie-mcp"}
+    web, mcp = services["officegenie"], services["officegenie-mcp"]
     assert web["buildCommand"] == "pip install -r requirements.txt && python scripts/pwa_setup.py"
     assert web["startCommand"].endswith(
         "streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true")

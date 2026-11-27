@@ -1,6 +1,6 @@
 """배포 후 점검을 자동으로 한다. 실제 로그인·토큰 발급이 필요한 항목은 수동 확인 목록으로 안내한다.
 
-    python scripts/deploy_check.py https://officegenie-web.onrender.com https://officegenie-mcp.onrender.com
+    python scripts/deploy_check.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
 
 자동 점검
 - 웹: 첫 화면 응답, Streamlit 헬스 경로, PWA 태그(manifest 링크·서비스 워커 등록)

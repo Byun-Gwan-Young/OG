@@ -72,7 +72,7 @@ streamlit run app.py                                 # 회사 코드 + EMP001 + 
 
 | 서비스 | 주소 |
 |---|---|
-| 웹 | `https://<officegenie-web 주소>.onrender.com` |
+| 웹 | `https://<officegenie 주소>.onrender.com` |
 | AI 앱 연결(MCP) | `https://<officegenie-mcp 주소>.onrender.com/mcp` — 토큰은 웹 홈의 **AI 앱 연결** 카드에서 발급 |
 
 무료 플랜은 한동안 접속이 없으면 잠들어 첫 로딩에 최대 1분 걸립니다. 시연 전에는 `python scripts/warmup.py <웹 주소> <MCP 주소>`로 깨워 두세요.

@@ -213,11 +213,11 @@ python remote_server.py          # http://localhost:8000 (PORT 환경변수로 �
 
 ## 6. Render 배포하기
 
-웹(`officegenie-web`)과 원격 MCP 서버(`officegenie-mcp`) 두 서비스를 Render 무료 플랜에 올리고, 둘 다 같은 Neon PostgreSQL을 씁니다.
+웹(`officegenie`)과 원격 MCP 서버(`officegenie-mcp`) 두 서비스를 Render 무료 플랜에 올리고, 둘 다 같은 Neon PostgreSQL을 씁니다.
 설정은 저장소 루트의 `render.yaml`(Blueprint)에 있습니다.
 
 ```
-사원 브라우저 ──https──▶ officegenie-web (Streamlit) ─┐
+사원 브라우저 ──https──▶ officegenie (Streamlit)     ─┐
 사원 AI 앱   ──https──▶ officegenie-mcp (/mcp)       ─┴──▶ Neon PostgreSQL (DATABASE_URL)
 ```
 
@@ -230,6 +230,9 @@ python remote_server.py          # http://localhost:8000 (PORT 환경변수로 �
    - 웹 빌드 `pip install -r requirements.txt && python scripts/pwa_setup.py`, 시작 `python scripts/preflight.py && streamlit run app.py …`
    - MCP 빌드 `pip install -r requirements.txt`, 시작 `python remote_server.py` (Render가 주는 `PORT`, 0.0.0.0)
    - 헬스 체크: 웹 `/_stcore/health`, MCP `/health`. Python 버전은 `PYTHON_VERSION`(= `.python-version`)으로 고정
+   - 리전은 두 서비스 모두 `singapore`입니다. Render는 만든 뒤에 리전을 바꿀 수 없으니, 바꾸려면 서비스를 새로 만들어야 합니다.
+   - 주소는 서비스 이름을 따라 `https://officegenie.onrender.com`, `https://officegenie-mcp.onrender.com`이 됩니다.
+     같은 이름이 이미 쓰이고 있으면 Render가 뒤에 문자를 붙이므로, 실제 주소는 각 서비스 화면에서 확인하세요.
 3. **환경변수 입력**: Blueprint 화면에서 `sync: false` 값을 두 서비스 모두에 넣습니다.
 
    | 변수 | 값 |
@@ -254,13 +257,13 @@ python remote_server.py          # http://localhost:8000 (PORT 환경변수로 �
 6. **깨우기와 점검**:
 
    ```bash
-   python scripts/warmup.py https://officegenie-web.onrender.com https://officegenie-mcp.onrender.com
-   python scripts/deploy_check.py https://officegenie-web.onrender.com https://officegenie-mcp.onrender.com
+   python scripts/warmup.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
+   python scripts/deploy_check.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
    ```
 
    `deploy_check.py`는 웹 응답, PWA 파일(manifest·서비스 워커·오프라인 화면), HTTPS, MCP `/health`, 잘못된 토큰 거부를 자동으로
    확인하고, 실제 로그인·토큰 발급이 필요한 항목은 수동 확인 목록으로 출력합니다. 실패가 0개면 종료 코드 0입니다.
-7. **회사 관리자에게 웹 주소 공유**: `https://officegenie-web.onrender.com`과 회사 코드를 전달합니다. 사원은 같은 주소에서
+7. **회사 관리자에게 웹 주소 공유**: `https://officegenie.onrender.com`과 회사 코드를 전달합니다. 사원은 같은 주소에서
    로그인하고, 휴대폰에서는 홈 화면에 추가(PWA)할 수 있습니다.
 
 - **잠들기**: 무료 플랜은 15분 동안 요청이 없으면 잠들고, 깨는 데 최대 1분쯤 걸립니다. 로그인 화면에 안내가 있고,

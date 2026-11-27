@@ -1,6 +1,6 @@
 """잠든 Render 무료 서비스를 깨우고 응답 시간·상태를 표로 출력한다.
 
-    python scripts/warmup.py https://officegenie-web.onrender.com https://officegenie-mcp.onrender.com
+    python scripts/warmup.py https://officegenie.onrender.com https://officegenie-mcp.onrender.com
 
 - 무료 플랜은 15분 동안 요청이 없으면 잠들고, 깨는 데 최대 1분쯤 걸린다.
 - 두 서비스에 동시에 요청을 보내고, 응답이 올 때까지(기본 최대 120초) 다시 시도한다.
@@ -115,7 +115,7 @@ def print_table(rows: list[list[str]], headers: list[str]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Render 서비스 깨우기")
-    p.add_argument("web_url", help="웹 주소 (예: https://officegenie-web.onrender.com)")
+    p.add_argument("web_url", help="웹 주소 (예: https://officegenie.onrender.com)")
     p.add_argument("mcp_url", help="MCP 주소 (예: https://officegenie-mcp.onrender.com 또는 …/mcp)")
     p.add_argument("--timeout", type=float, default=120, help="서비스별 최대 대기 시간(초)")
     a = p.parse_args(argv)

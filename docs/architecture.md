@@ -48,7 +48,7 @@ UI 개발자용 연동 규격은 [ui_contract.md](ui_contract.md)에 있습니�
 flowchart LR
     B([👩‍💼 브라우저 · PWA]) -->|https| P1{{Render HTTPS 프록시}}
     C([🤖 AI 앱]) -->|"https + Bearer og_…"| P2{{Render HTTPS 프록시}}
-    P1 -->|"http + X-Forwarded-Proto"| W["officegenie-web<br/>preflight.py → streamlit run app.py<br/>(app.py가 mcp_server.py를 stdio로 띄움)"]
+    P1 -->|"http + X-Forwarded-Proto"| W["officegenie<br/>preflight.py → streamlit run app.py<br/>(app.py가 mcp_server.py를 stdio로 띄움)"]
     P2 -->|"http + X-Forwarded-Proto"| M["officegenie-mcp<br/>remote_server.py (PORT, 0.0.0.0)"]
     W --> N[(Neon PostgreSQL<br/>DATABASE_URL)]
     M --> N
@@ -56,7 +56,7 @@ flowchart LR
 
 | 서비스 | 시작 | 헬스 체크 | 하는 일 |
 |---|---|---|---|
-| `officegenie-web` | `python scripts/preflight.py && streamlit run app.py --server.port $PORT …` | `/_stcore/health` | 웹 화면 · 챗봇(LLM 키는 이 서비스에만 필요) · 사원 토큰 발급 카드 |
+| `officegenie` | `python scripts/preflight.py && streamlit run app.py --server.port $PORT …` | `/_stcore/health` | 웹 화면 · 챗봇(LLM 키는 이 서비스에만 필요) · 사원 토큰 발급 카드 |
 | `officegenie-mcp` | `python remote_server.py` | `/health` | AI 앱용 MCP 엔드포인트 `/mcp`와 안내 홈페이지 `/` |
 
 - 두 서비스는 상태를 갖지 않습니다. 무료 플랜은 재시작·잠들 때 디스크가 초기화되므로 회사 데이터, 계정, 로그인 세션,
@@ -226,7 +226,7 @@ officegenie/
 │   ├── preflight.py       # 웹 시작 전 점검: 운영 모드 DB 필수, PWA 적용 경고
 │   ├── warmup.py          # 잠든 Render 서비스 깨우기, 응답 시간 표
 │   └── deploy_check.py    # 배포 후 자동 점검 + 수동 확인 목록
-├── render.yaml            # Render Blueprint (officegenie-web, officegenie-mcp)
+├── render.yaml            # Render Blueprint (officegenie, officegenie-mcp)
 ├── tests/                 # pytest (API 키 없이 실행, 임시 SQLite)
 └── requirements.txt
 ```
