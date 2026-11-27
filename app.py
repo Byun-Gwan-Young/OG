@@ -2402,23 +2402,38 @@ def _session_still_valid(agent: OfficeGenieAgent) -> bool:
     return bool(result.get("ok"))
 
 
+def _request_is_https() -> bool:
+    """사용자 브라우저와 맺은 연결이 HTTPS인지. Render 같은 프록시 뒤에서는 앱까지는 HTTP로
+    들어오므로 프록시가 붙이는 X-Forwarded-Proto(쉼표로 이어지면 맨 앞)를 본다."""
+    try:
+        proto = (st.context.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        if proto:
+            return proto == "https"
+        return str(st.context.url or "").startswith("https://")
+    except Exception:  # AppTest 등 요청 정보가 없는 실행 환경
+        return False
+
+
 def _apply_cookie_action() -> None:
     """로그인·로그아웃 직후 한 번만 브라우저 쿠키를 쓰거나 지운다.
 
-    쿠키 값은 서버가 만든 무작위 토큰뿐이다. SameSite=Strict, HTTPS면 Secure.
+    쿠키 값은 서버가 만든 무작위 토큰뿐이다. SameSite=Strict.
+    HTTPS(프록시 헤더 기준)면 서버가 Secure를 붙이고, 브라우저 주소가 https일 때도 JS가 붙인다.
     """
     action = st.session_state.pop("cookie_action", None)
     if not action:
         return
     kind, token = action
+    secure = "; Secure" if _request_is_https() else ""
     if kind == "set" and _TOKEN_RE.fullmatch(token or ""):
-        cookie = f"{SESSION_COOKIE}={token}; Path=/; Max-Age={SESSION_COOKIE_MAX_AGE}; SameSite=Strict"
+        cookie = f"{SESSION_COOKIE}={token}; Path=/; Max-Age={SESSION_COOKIE_MAX_AGE}; SameSite=Strict{secure}"
     else:
-        cookie = f"{SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Strict"
+        cookie = f"{SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Strict{secure}"
     with st.container(key="cookie_sync", height=1, border=False):
         st.html(
-            f"<script>document.cookie = {json.dumps(cookie)} + "
-            "(location.protocol === 'https:' ? '; Secure' : '');</script>",
+            f"<script>document.cookie = {json.dumps(cookie)}"
+            + ("" if secure else " + (location.protocol === 'https:' ? '; Secure' : '')")
+            + ";</script>",
             unsafe_allow_javascript=True,
         )
 

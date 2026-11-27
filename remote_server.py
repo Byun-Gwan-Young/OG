@@ -234,11 +234,11 @@ footer{{margin-top:64px;color:var(--mut);font-size:13px;border-top:1px solid var
 <p class="lead">신입사원의 "식대 얼마야?", "연차 며칠 남았어?", "회의실 어디야?"를 사내 데이터 근거로만 답합니다.
 쓰고 있는 AI 앱에 아래 주소를 추가하면 바로 연결됩니다.</p>
 <div class="url"><code id="u">{e(url)}</code><button onclick="navigator.clipboard.writeText(document.getElementById('u').textContent);this.textContent='복사됨'">주소 복사</button></div>
-<p class="mut" style="font-size:14px">접속에는 개인 토큰이 필요합니다. 토큰은 사람마다 하나이며, 토큰의 주인(회사 · 사번) 기준으로만 정보가 조회됩니다.</p>
+<p class="mut" style="font-size:14px">접속에는 개인 토큰이 필요합니다. 토큰은 오피스지니 웹 홈에서 직접 발급하며(한 사람당 최대 3개), 토큰의 주인(회사 · 사번) 기준으로만 정보가 조회됩니다.</p>
 
 <h2>연결하기</h2>
 <ol class="steps">
-<li>운영자에게 <b>개인 토큰</b>을 받습니다.</li>
+<li>오피스지니 웹에 로그인해 홈의 <b>AI 앱 연결</b> 카드에서 개인 토큰을 발급합니다. 토큰은 발급할 때 한 번만 보입니다.</li>
 <li>쓰는 AI 앱에 아래 설정을 추가하고, <code>발급받은_토큰</code>을 받은 토큰으로 바꿉니다.</li>
 <li>"점심 식대 한도랑 내 남은 연차 며칠이야?"라고 물어보세요.</li>
 </ol>

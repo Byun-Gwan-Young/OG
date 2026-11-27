@@ -29,7 +29,25 @@ def main() -> int:
         log.critical("%s", exc)
         return 2
     log.info("설정 확인 완료 (운영 모드: %s)", "예" if storage.is_production() else "아니오")
+    check_pwa()
     return 0
+
+
+def check_pwa() -> list[str]:
+    """배포 빌드에서 pwa_setup.py가 적용됐는지 확인한다. 미적용이면 경고만 남긴다."""
+    from scripts import pwa_setup
+
+    try:
+        problems = pwa_setup.check(pwa_setup.streamlit_static_dir())
+    except Exception as exc:  # 점검 실패로 서비스 시작을 막지 않는다
+        log.warning("PWA 적용 여부를 확인하지 못했습니다 (%s)", type(exc).__name__)
+        return ["check_failed"]
+    if problems:
+        log.warning("PWA 미적용: 빌드 명령에 'python scripts/pwa_setup.py'가 있는지 확인하세요. %s",
+                    "; ".join(problems))
+    else:
+        log.info("PWA 적용 확인")
+    return problems
 
 
 if __name__ == "__main__":

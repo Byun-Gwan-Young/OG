@@ -141,3 +141,13 @@ def test_production_without_database_url_fails_at_startup(script, tmp_path):
     assert done.returncode != 0
     assert "DATABASE_URL" in done.stderr
     assert not (tmp_path / "officegenie.db").exists()
+
+
+def test_preflight_warns_when_pwa_missing(tmp_path, monkeypatch, caplog):
+    from scripts import preflight, pwa_setup
+
+    monkeypatch.setattr(pwa_setup, "streamlit_static_dir", lambda: tmp_path)
+    (tmp_path / "index.html").write_text("<html><head></head></html>", "utf-8")
+    with caplog.at_level("WARNING", logger="officegenie.preflight"):
+        assert preflight.main() == 0  # 경고만, 시작은 계속
+    assert "PWA 미적용" in caplog.text
