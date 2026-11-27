@@ -146,10 +146,7 @@ def confirm_support_ticket(item: str, quantity: int = 1, purpose: str = "",
 def get_my_tickets() -> dict:
     """본인의 비품·계정 신청 현황(티켓 번호, 품목, 상태)을 최신순으로 조회한다."""
     cid, eid = _me()
-    r = core.ui_get_sidebar(company_id=cid, employee_id=eid)
-    if r.get("ok"):
-        r["data"] = {"tickets": r["data"]["tickets"]}
-    return r
+    return core.get_my_tickets(company_id=cid, employee_id=eid)
 
 
 # ---------------------------------------------------------------------------

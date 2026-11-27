@@ -29,6 +29,7 @@ from sqlalchemy import (
     Column,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -253,6 +254,43 @@ audit_log = Table(
     Column("action", String(100), nullable=False),
     Column("target", String(300)),
     Column("detail", JSON, nullable=False, default=dict),
+)
+
+# 자료실: 관리자가 올린 파일(최대 5MB, 바이트를 DB에 저장) 또는 링크.
+# visibility="department"이면 같은 부서 사원에게만 보인다(서버에서 확인).
+resources = Table(
+    "resources",
+    metadata,
+    Column("company_id", String(100), primary_key=True),
+    Column("resource_id", String(32), primary_key=True),
+    Column("title", String(200), nullable=False),
+    Column("category", String(50), nullable=False),
+    Column("description", String),
+    Column("kind", String(10), nullable=False),
+    Column("url", String(1000)),
+    Column("file_name", String(200)),
+    Column("mime_type", String(120)),
+    Column("size_bytes", Integer),
+    Column("content", LargeBinary),
+    Column("visibility", String(20), nullable=False),
+    Column("department", String(200)),
+    Column("is_public", Boolean, nullable=False),
+    Column("created_by", String(100), nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("updated_at", String(40), nullable=False),
+)
+
+# 새로고침해도 로그인을 유지하는 서버 세션. 브라우저 쿠키에는 무작위 토큰만 두고,
+# DB에는 그 SHA-256 해시만 저장한다. 신원·역할은 매번 accounts에서 다시 확인한다.
+login_sessions = Table(
+    "login_sessions",
+    metadata,
+    Column("token_hash", String(64), primary_key=True),
+    Column("company_id", String(100), nullable=False, index=True),
+    Column("account_id", String(100), nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("last_seen_at", String(40), nullable=False),
+    Column("expires_at", String(40), nullable=False),
 )
 
 _STATIC_TABLES = (
@@ -969,6 +1007,44 @@ def get_tickets(company_id: str, employee_id: str | None = None) -> list[dict]:
         lambda conn: [dict(row) for row in conn.execute(statement).mappings()]
     )
     return [_record_ticket(row) for row in rows]
+
+
+def list_my_tickets(company_id: str, employee_id: str) -> list[dict]:
+    """본인 신청만 최신순. 상태 변경 이력(처리자 제외)과 최근 변경 시각을 함께 준다."""
+    statement = (
+        select(tickets)
+        .where(and_(tickets.c.company_id == company_id, tickets.c.employee_id == employee_id))
+        .order_by(tickets.c.ticket_order.desc())
+    )
+    rows = _run_db(lambda conn: [dict(row) for row in conn.execute(statement).mappings()])
+    result = []
+    for row in rows:
+        record = _record_ticket(row)
+        history = [
+            {
+                "at": entry.get("at"),
+                "from": entry.get("from"),
+                "to": entry.get("to"),
+                "note": entry.get("note") or "",
+            }
+            for entry in (row.get("history") or [])
+            if isinstance(entry, dict)
+        ]
+        result.append(
+            {
+                "ticket_id": record["ticket_id"],
+                "type": record["type"],
+                "item": record["item"],
+                "quantity": record["quantity"],
+                "purpose": record.get("purpose") or "",
+                "status": record["status"],
+                "created_at": record["created_at"],
+                "updated_at": history[-1]["at"] if history else record["created_at"],
+                "scheduled_date": record.get("scheduled_date"),
+                "history": history,
+            }
+        )
+    return result
 
 
 def _json_extra(record: dict, known: set[str]) -> dict:
@@ -2100,6 +2176,7 @@ def change_password(
             )
         )
         _audit(conn, company_id, account_id, "password_changed", account_id)
+        _revoke_account_sessions(conn, company_id, account_id)
         return "ok"
 
     return _run_db(operation, write=True, immediate=True)
@@ -2294,6 +2371,111 @@ def record_admin_view(
             _audit(conn, company_id, actor, action, target)
 
     _run_db(operation, write=True)
+
+
+# ---------------------------------------------------------------------------
+# 로그인 세션 (새로고침 후 로그인 유지)
+# ---------------------------------------------------------------------------
+
+SESSION_IDLE_SECONDS = 30 * 60  # 30분 무동작이면 만료(화면의 자동 로그아웃과 같은 기준)
+SESSION_MAX_SECONDS = 12 * 60 * 60  # 로그인 후 최대 12시간
+SESSION_TOUCH_SECONDS = 60  # 마지막 사용 시각은 1분에 한 번만 갱신한다
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def create_login_session(company_id: str, account_id: str) -> str:
+    """새 세션 토큰을 만든다. 원문은 호출한 쪽에 한 번만 돌려주고 DB에는 해시만 남긴다."""
+    token = secrets.token_urlsafe(32)
+    now = _utc_now()
+
+    def operation(conn: Connection) -> None:
+        # 만료된 세션은 이때 같이 정리한다.
+        conn.execute(delete(login_sessions).where(login_sessions.c.expires_at < _iso(now)))
+        conn.execute(
+            insert(login_sessions).values(
+                token_hash=_token_hash(token),
+                company_id=company_id,
+                account_id=account_id,
+                created_at=_iso(now),
+                last_seen_at=_iso(now),
+                expires_at=_iso(now + timedelta(seconds=SESSION_MAX_SECONDS)),
+            )
+        )
+
+    _run_db(operation, write=True)
+    return token
+
+
+def resume_login_session(token: str) -> dict | None:
+    """토큰이 유효하면 {"company_id", "account_id", "role", "must_change"}를 돌려준다.
+
+    만료·잠금·비활성 계정·모르는 토큰은 모두 None. 무효 토큰은 지운다.
+    """
+    token = str(token or "")
+    if not token or len(token) > 200:
+        return None
+    now = _utc_now()
+
+    def operation(conn: Connection) -> dict | None:
+        key = login_sessions.c.token_hash == _token_hash(token)
+        row = conn.execute(select(login_sessions).where(key)).mappings().first()
+        if row is None:
+            return None
+        expires = _parse_iso(row["expires_at"])
+        last_seen = _parse_iso(row["last_seen_at"])
+        account = conn.execute(
+            select(accounts).where(_account_key(row["company_id"], row["account_id"]))
+        ).mappings().first()
+        if (
+            expires is None
+            or expires <= now
+            or last_seen is None
+            or (now - last_seen).total_seconds() > SESSION_IDLE_SECONDS
+            or account is None
+            or _account_status(dict(account), now) in ("disabled", "locked")
+        ):
+            conn.execute(delete(login_sessions).where(key))
+            return None
+        if (now - last_seen).total_seconds() >= SESSION_TOUCH_SECONDS:
+            conn.execute(update(login_sessions).where(key).values(last_seen_at=_iso(now)))
+        return {
+            "company_id": row["company_id"],
+            "account_id": row["account_id"],
+            "role": account["role"],
+            "must_change": bool(account["must_change"]),
+        }
+
+    return _run_db(operation, write=True)
+
+
+def revoke_login_session(token: str) -> None:
+    token = str(token or "")
+    if not token:
+        return
+    _run_db(
+        lambda conn: conn.execute(
+            delete(login_sessions).where(login_sessions.c.token_hash == _token_hash(token))
+        ),
+        write=True,
+    )
+
+
+def _revoke_account_sessions(conn: Connection, company_id: str, account_id: str) -> None:
+    conn.execute(
+        delete(login_sessions).where(
+            and_(
+                login_sessions.c.company_id == company_id,
+                login_sessions.c.account_id == account_id,
+            )
+        )
+    )
+
+
+def revoke_account_sessions(company_id: str, account_id: str) -> None:
+    _run_db(lambda conn: _revoke_account_sessions(conn, company_id, account_id), write=True)
 
 
 def company_overview(company_id: str) -> dict | None:
@@ -2549,6 +2731,110 @@ def admin_save_announcement(
     return _run_db(operation, write=True, immediate=True)
 
 
+# ---------------------------------------------------------------------------
+# 자료실. 형식·크기·권한 검증은 mcp_server.py가 먼저 하고, 여기서는 회사 범위로만 읽고 쓴다.
+# ---------------------------------------------------------------------------
+
+_RESOURCE_META = (
+    "resource_id", "title", "category", "description", "kind", "url", "file_name",
+    "mime_type", "size_bytes", "visibility", "department", "is_public",
+    "created_by", "created_at", "updated_at",
+)
+
+
+def _resource_columns():
+    return [resources.c[name] for name in _RESOURCE_META]
+
+
+def list_resources(company_id: str) -> list[dict]:
+    """회사의 자료 목록(파일 바이트 제외), 최근 수정순."""
+    statement = (
+        select(*_resource_columns())
+        .where(resources.c.company_id == company_id)
+        .order_by(resources.c.updated_at.desc(), resources.c.resource_id.desc())
+    )
+    return _run_db(lambda conn: [dict(row) for row in conn.execute(statement).mappings()])
+
+
+def get_resource(company_id: str, resource_id: str, *, with_content: bool = False) -> dict | None:
+    columns = _resource_columns() + ([resources.c.content] if with_content else [])
+    row = _run_db(
+        lambda conn: conn.execute(
+            select(*columns).where(
+                and_(resources.c.company_id == company_id, resources.c.resource_id == str(resource_id or ""))
+            )
+        ).mappings().first()
+    )
+    return dict(row) if row else None
+
+
+def admin_save_resource(company_id: str, actor: str, resource_id: str | None, values: dict) -> dict | None:
+    """자료 추가(resource_id=None) 또는 수정. 수정 때 content가 없으면 기존 파일을 유지한다.
+
+    반환: 저장한 자료(바이트 제외). 수정 대상이 없으면 None.
+    """
+    now = _iso(_utc_now())
+    allowed = {
+        "title", "category", "description", "kind", "url", "file_name", "mime_type",
+        "size_bytes", "content", "visibility", "department", "is_public",
+    }
+    values = {k: v for k, v in values.items() if k in allowed}
+
+    def operation(conn: Connection) -> dict | None:
+        if resource_id is None:
+            new_id = f"RES-{uuid4().hex[:10].upper()}"
+            conn.execute(
+                insert(resources).values(
+                    company_id=company_id, resource_id=new_id, created_by=str(actor),
+                    created_at=now, updated_at=now, **values,
+                )
+            )
+            action, target = "resource_created", new_id
+        else:
+            key = and_(resources.c.company_id == company_id, resources.c.resource_id == resource_id)
+            if conn.execute(select(resources.c.resource_id).where(key)).first() is None:
+                return None
+            if values.get("kind") == "link":
+                values.update(file_name=None, mime_type=None, size_bytes=None, content=None)
+            elif "content" in values and values["content"] is None:
+                for name in ("content", "file_name", "mime_type", "size_bytes"):
+                    values.pop(name, None)
+            conn.execute(update(resources).where(key).values(updated_at=now, **values))
+            action, target = "resource_updated", resource_id
+        _audit(
+            conn, company_id, actor, action, target,
+            {
+                "title": values.get("title"),
+                "kind": values.get("kind"),
+                "visibility": values.get("visibility"),
+                "department": values.get("department"),
+                "is_public": values.get("is_public"),
+                "size_bytes": values.get("size_bytes"),
+            },
+        )
+        row = conn.execute(
+            select(*_resource_columns()).where(
+                and_(resources.c.company_id == company_id, resources.c.resource_id == target)
+            )
+        ).mappings().first()
+        return dict(row)
+
+    return _run_db(operation, write=True, immediate=True)
+
+
+def admin_delete_resource(company_id: str, actor: str, resource_id: str) -> bool:
+    def operation(conn: Connection) -> bool:
+        key = and_(resources.c.company_id == company_id, resources.c.resource_id == str(resource_id or ""))
+        row = conn.execute(select(resources.c.title).where(key)).mappings().first()
+        if row is None:
+            return False
+        conn.execute(delete(resources).where(key))
+        _audit(conn, company_id, actor, "resource_deleted", resource_id, {"title": row["title"]})
+        return True
+
+    return _run_db(operation, write=True, immediate=True)
+
+
 def admin_list_accounts(company_id: str) -> list[dict]:
     """사원 계정 상태(사원 목록에 있는 사람 + JSON에서 빠져 비활성인 계정)."""
 
@@ -2701,6 +2987,7 @@ def admin_reset_password(company_id: str, employee_id: str, actor: str) -> str |
             )
         )
         _audit(conn, company_id, actor, "password_reset", employee_id)
+        _revoke_account_sessions(conn, company_id, employee_id)
         return password
 
     return _run_db(operation, write=True, immediate=True)
@@ -2783,7 +3070,7 @@ def clear_tables_for_tests() -> None:
         raise RuntimeError("테스트 환경에서만 사용할 수 있습니다.")
 
     def operation(conn: Connection) -> None:
-        for table in (audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
+        for table in (resources, login_sessions, audit_log, accounts, tickets, *_CLEAR_ORDER, companies):
             conn.execute(delete(table))
 
     _run_db(operation, write=True)
@@ -2795,7 +3082,7 @@ def clear_tables_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 # 테스트가 흔히 바꾸는 표. 회사 정적 데이터(규정·사원 등)는 data_version으로 변경을 감지한다.
-_BASELINE_TABLES = (tickets, announcements, accounts, audit_log)
+_BASELINE_TABLES = (tickets, announcements, accounts, audit_log, login_sessions, resources)
 
 
 def _require_testing() -> None:

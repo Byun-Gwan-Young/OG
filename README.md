@@ -13,7 +13,7 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?logo=streamlit&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-131%20passed-2EA043)
 
-<img src="docs/images/dashboard.png" alt="오피스지니 대시보드" width="860">
+<img src="docs/images/ui-review/after-pc-home.png" alt="오피스지니 사원 홈(사원증)" width="860">
 
 </div>
 
@@ -35,7 +35,7 @@
 
 | 누가 | 어떻게 | 가이드 |
 |---|---|---|
-| 👩‍💼 **직원** | 회사 코드 · 사번 · 비밀번호로 로그인해 대시보드와 챗봇 사용 | **[직원 가이드 →](docs/guide-employee.md)** |
+| 👩‍💼 **직원** | 회사 코드 · 사번 · 비밀번호로 로그인해 홈(사원증) · 공지사항 · 자료실 · 비품 신청과 챗봇 사용. 휴대폰 홈 화면에 설치 가능 | **[직원 가이드 →](docs/guide-employee.md)** |
 | 🏢 **회사 관리자** | 회사 등록 → 회사 코드 확인 → 양식대로 규정·사원 데이터 업로드 → 미리보기 → 반영, 신청·계정 관리 | **[관리자 가이드 1부 →](docs/guide-admin.md#1부-회사-관리자)** |
 | 🤖 **AI 앱 사용자** | 쓰고 있는 AI 앱(Claude Code, Cursor 등)에 MCP 서버 연결 | **[AI 앱 연결 가이드 →](docs/guide-mcp.md)** |
 | 🛠 **서비스 운영자** | 서버 배포, 가입 코드 설정, 운영 스크립트 · 토큰 배포 | **[관리자 가이드 2부 →](docs/guide-admin.md#2부-서비스-운영자)** |
@@ -62,10 +62,11 @@ python -m venv .venv && source .venv/bin/activate   # Windows: .\.venv\Scripts\A
 pip install -r requirements.txt
 cp env.example .env                                  # LLM_API_KEY, LLM_BASE_URL (선택: DATABASE_URL) 입력
 python scripts/import_company.py --all               # 시연 회사 JSON → DB (DATABASE_URL이 없으면 로컬 SQLite), 회사 코드 출력
+python scripts/pwa_setup.py                          # PWA 설정 (streamlit을 다시 설치할 때마다)
 streamlit run app.py                                 # 회사 코드 + EMP001 + data/의 비밀번호로 로그인
 ```
 
-새 회사는 로그인 화면의 **"회사 등록하기"** 로 만들고, 관리자 화면에서 데이터를 올리면 됩니다. 시연 회사의 관리자 계정은 `python scripts/set_admin_password.py bridgesoft`로 만듭니다.
+새 회사는 첫 화면의 **회사 등록**으로 만들고, 관리자 화면에서 데이터를 올리면 됩니다. 시연 회사의 관리자 계정은 `python scripts/set_admin_password.py bridgesoft`로 만듭니다.
 
 자세한 설치, MCP 서버 실행, 토큰 발급, 문제 해결은 [관리자 가이드](docs/guide-admin.md)를 보세요.
 
@@ -83,6 +84,8 @@ streamlit run app.py                                 # 회사 코드 + EMP001 + 
 
 - [x] MCP 툴 5종과 서버 쪽 권한 · 비품 검증
 - [x] 직원용 웹 화면 (대시보드 + 챗봇 + 신청 확인)
+- [x] 메뉴형 화면(PC 상단 메뉴 · 모바일 하단 탭바), 사원증 홈, 자료실, 비품 신청 메뉴, 새로고침 후 로그인 유지
+- [x] PWA(홈 화면 설치, 오프라인 안내) — `python scripts/pwa_setup.py`
 - [x] 원격 MCP 서버 + 개인 토큰 인증 + 안내 홈페이지
 - [ ] 사내 로그인 연동 (접속한 직원 자동 판별)
 - [ ] 원격 서버 배포 (HTTPS) 및 OAuth 인증

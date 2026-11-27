@@ -124,6 +124,7 @@ def test_login_employee_success_ignores_code_case_and_spaces():
     assert set(data) == {
         "company_id", "company_name", "role", "employee_id", "name",
         "department", "position", "must_change",
+        "session_token",  # 새로고침 후 로그인 유지용 무작위 토큰(DB에는 해시만)
     }
 
 
@@ -347,6 +348,7 @@ def test_admin_password_script_and_admin_login(capsys):
     r = s.ui_login(_code(A), " admin ", "admin-pass-1")
     assert r["ok"]
     assert r["data"] == {
+        "session_token": r["data"]["session_token"],
         "company_id": A, "company_name": r["data"]["company_name"], "role": "admin",
         "account_id": "ADMIN", "must_change": False,
     }
@@ -400,7 +402,7 @@ def test_login_tools_are_not_llm_tools():
     llm_tools = agent_module.LLM_TOOLS
     assert llm_tools == {
         "search_policy", "get_employee_info", "get_office_location",
-        "get_handover_doc", "create_support_ticket",
+        "get_handover_doc", "create_support_ticket", "get_my_tickets",
     }
     assert not any(name.startswith("ui_") for name in llm_tools)
     assert not hasattr(s, "ui_list_companies") and not hasattr(s, "ui_list_employees")

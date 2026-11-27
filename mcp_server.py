@@ -21,12 +21,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hmac
 import logging
 import math
 import os
 import re
 import sys
+import unicodedata
 from functools import wraps
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
@@ -638,6 +641,39 @@ def create_support_ticket(
     )
 
 
+@mcp.tool
+@_storage_safe
+def get_my_tickets(company_id: str, employee_id: str) -> dict:
+    """본인의 비품·계정 신청 현황을 최신순으로 조회한다.
+
+    호출 조건: "내 모니터 언제 받아?", "신청한 거 어떻게 됐어?", "내 신청 내역 보여 줘"처럼
+    본인이 이미 신청한 건의 상태를 물을 때. 인자는 없다(본인 신청만 조회된다).
+    반환: tickets = [{ticket_id, type, item, quantity, status, created_at, updated_at,
+    scheduled_date(관리자가 정한 경우만, 없으면 null), note(반려 사유 등 최근 메모)}].
+    scheduled_date가 null이면 지급 예정일이 아직 정해지지 않은 것이다. 날짜를 추측하지 않는다.
+    """
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    tickets = storage.list_my_tickets(company_id, me["employee_id"])
+    rows = [
+        {
+            "ticket_id": t["ticket_id"],
+            "type": t["type"],
+            "item": t["item"],
+            "quantity": t["quantity"],
+            "status": t["status"],
+            "created_at": t["created_at"],
+            "updated_at": t["updated_at"],
+            "scheduled_date": t.get("scheduled_date") or None,
+            "note": (t["history"][-1]["note"] if t["history"] else "") or "",
+        }
+        for t in tickets
+    ]
+    message = "" if rows else "아직 신청한 내역이 없습니다."
+    return ok(data={"tickets": rows, "count": len(rows)}, message=message)
+
+
 # ---------------------------------------------------------------------------
 # UI 전용 툴 (LLM에게는 노출하지 않음 — agent.py의 LLM_TOOLS 참고)
 # ---------------------------------------------------------------------------
@@ -681,10 +717,35 @@ def _log_login_failure(
     )
 
 
+def _login_payload(company: dict, account_id: str, role: str, must_change: bool) -> dict | None:
+    """로그인·세션 복원 공통 응답(data). 사원 정보가 없으면 None."""
+    base = {
+        "company_id": company["company_id"],
+        "company_name": company.get("company_name") or company["company_id"],
+        "role": role,
+        "must_change": bool(must_change),
+    }
+    if role == storage.ROLE_ADMIN:
+        return {**base, "account_id": storage.ADMIN_ACCOUNT_ID}
+    employee = storage.get_employee(company["company_id"], account_id)
+    if employee is None:
+        return None
+    return {
+        **base,
+        "employee_id": employee["employee_id"],
+        "name": employee["name"],
+        "department": employee["department"],
+        "position": employee.get("position") or None,
+    }
+
+
 @mcp.tool
 @_storage_safe
 def ui_login(company_code: str, account_id: str, password: str) -> dict:
-    """[UI 전용] 회사 코드 + 아이디(사번 또는 ADMIN) + 비밀번호 로그인."""
+    """[UI 전용] 회사 코드 + 아이디(사번 또는 ADMIN) + 비밀번호 로그인.
+
+    성공하면 새로고침 후 로그인 유지용 session_token을 함께 돌려준다(DB에는 해시만 저장).
+    """
     result = storage.authenticate(company_code, account_id, password)
     if result["status"] != "ok":
         _log_login_failure(result, company_code, account_id, password)
@@ -693,31 +754,49 @@ def ui_login(company_code: str, account_id: str, password: str) -> dict:
     if result["status"] != "ok":
         return fail("LOGIN_FAILED", MSG["LOGIN_FAILED"])
     company = result["company"]
-    base = {
-        "company_id": company["company_id"],
-        "company_name": company["company_name"],
-        "role": result["role"],
-        "must_change": result["must_change"],
-    }
-    if result["role"] == storage.ROLE_ADMIN:
-        return ok(data={**base, "account_id": storage.ADMIN_ACCOUNT_ID})
-    employee = storage.get_employee(company["company_id"], result["account_id"])
-    if employee is None:
+    data = _login_payload(company, result["account_id"], result["role"], result["must_change"])
+    if data is None:
         log.warning(
             "login failed reason=account_without_employee company_id=%s account_id=%r",
             company["company_id"],
             result["account_id"],
         )
         return fail("LOGIN_FAILED", MSG["LOGIN_FAILED"])
-    return ok(
-        data={
-            **base,
-            "employee_id": employee["employee_id"],
-            "name": employee["name"],
-            "department": employee["department"],
-            "position": employee.get("position") or None,
-        }
+    data["session_token"] = storage.create_login_session(
+        company["company_id"], result["account_id"]
     )
+    return ok(data=data)
+
+
+@mcp.tool
+@_storage_safe
+def ui_resume_session(session_token: str) -> dict:
+    """[UI 전용] 브라우저 쿠키의 세션 토큰으로 로그인 상태를 복원한다(새로고침 대응).
+
+    토큰이 없거나 만료·잠금·비활성 계정이면 INVALID_SESSION. 응답 data는 ui_login과 같다
+    (session_token 제외).
+    """
+    session = storage.resume_login_session(session_token)
+    if session is None:
+        return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+    company = storage.get_company(session["company_id"])
+    data = (
+        _login_payload(company, session["account_id"], session["role"], session["must_change"])
+        if company
+        else None
+    )
+    if data is None:
+        storage.revoke_login_session(session_token)
+        return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
+    return ok(data=data)
+
+
+@mcp.tool
+@_storage_safe
+def ui_logout(session_token: str) -> dict:
+    """[UI 전용] 로그아웃: 이 브라우저의 세션 토큰을 서버에서 폐기한다."""
+    storage.revoke_login_session(session_token)
+    return ok("LOGGED_OUT")
 
 
 @mcp.tool
@@ -731,7 +810,13 @@ def ui_change_password(
         return fail("INVALID_SESSION", MSG["INVALID_SESSION"])
     status = storage.change_password(company_id, account_id, old_password, new_password)
     if status == "ok":
-        return ok("PASSWORD_CHANGED", message=MSG["PASSWORD_CHANGED"])
+        # 변경 시 이 계정의 기존 세션은 모두 폐기된다. 지금 화면용 세션만 새로 발급한다.
+        token = storage.create_login_session(company_id, account_id)
+        return ok(
+            "PASSWORD_CHANGED",
+            data={"session_token": token},
+            message=MSG["PASSWORD_CHANGED"],
+        )
     if status == "locked":
         return fail("ACCOUNT_LOCKED", MSG["LOGIN_LOCKED"])
     if status == "too_short":
@@ -1278,6 +1363,522 @@ def ui_get_sidebar(company_id: str, employee_id: str) -> dict:
             "announcements": storage.list_announcements(company_id, public_only=True),
         }
     )
+
+
+# 인수인계서 summary 필드 이름(templates/handovers.json 양식). 회사별 내용이 아니라 양식 이름이다.
+FIRST_WEEK_KEY = "1주 차 할 일"
+PENDING_TICKET_STATUSES = ("접수완료", "검토중")
+HOME_NOTICE_COUNT = 3
+
+
+def _first_week_tasks(company_id: str, department: str) -> dict:
+    """소속 부서 인수인계서의 '1주 차 할 일'(읽기 전용)."""
+    for handover in load(company_id, "handovers").get("handovers", []):
+        if handover.get("department") != department:
+            continue
+        tasks = (handover.get("summary") or {}).get(FIRST_WEEK_KEY)
+        if isinstance(tasks, str):
+            tasks = [tasks]
+        return {
+            "title": handover.get("title") or "",
+            "tasks": [str(task) for task in (tasks or []) if str(task).strip()],
+        }
+    return {"title": "", "tasks": []}
+
+
+def _home_payload(company_id: str, me: dict) -> dict:
+    """사원증 홈 화면 데이터. 사원 본인 화면과 관리자 미리보기가 같이 쓴다."""
+    company = storage.get_company(company_id) or {}
+    tickets = storage.list_my_tickets(company_id, me["employee_id"])
+    counts: dict[str, int] = {}
+    for ticket in tickets:
+        counts[ticket["status"]] = counts.get(ticket["status"], 0) + 1
+    notices = storage.list_announcements(company_id, public_only=True)
+    leave = me.get("annual_leave") or {}
+    week = me.get("onboarding_week")
+    return {
+        "company_name": company.get("company_name") or company_id,
+        "employee": {
+            "employee_id": me["employee_id"],
+            "name": me["name"],
+            "department": me["department"],
+            "position": me.get("position") or None,
+            "job_title": me.get("job_title") or None,
+            "onboarding_week": week if isinstance(week, int) and week > 0 else None,
+        },
+        "annual_leave": {
+            "remaining_days": leave.get("remaining_days"),
+            "granted_days": leave.get("granted_days"),
+            "used_days": leave.get("used_days"),
+            "as_of": leave.get("as_of"),
+        },
+        "ticket_counts": counts,
+        "tickets_total": len(tickets),
+        "latest_ticket": tickets[0] if tickets else None,
+        "announcements": notices[:HOME_NOTICE_COUNT],
+        "announcements_total": len(notices),
+        "first_week": _first_week_tasks(company_id, me["department"]),
+    }
+
+
+@mcp.tool
+@_storage_safe
+def ui_get_home(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 사원증 홈: 회사명·사원증 정보, 잔여 연차, 신청 진행 상황, 최근 공지 3개,
+    소속 부서 인수인계서의 '1주 차 할 일'."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    return ok(data=_home_payload(company_id, me))
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_preview_employee(
+    company_id: str, actor_account_id: str, employee_id: str
+) -> dict:
+    """[UI 전용·관리자] 직원 화면 미리보기(읽기 전용). 같은 회사 사원만, 감사 로그를 남긴다."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    target = storage.get_employee(company_id, str(employee_id or ""))
+    if target is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    storage.record_admin_view(company_id, actor_account_id, "preview_employee", target["employee_id"])
+    return ok(data={**_home_payload(company_id, target), "preview": True})
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_home(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 관리자 홈: 회사 카드, 처리 대기 신청, 최근 공지, 최근 업로드."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    overview = storage.company_overview(company_id)
+    if overview is None:
+        return fail("PERMISSION_DENIED", MSG["ADMIN_ONLY"])
+    pending = [
+        t for t in storage.admin_list_tickets(company_id) if t["status"] in PENDING_TICKET_STATUSES
+    ]
+    uploads = [
+        {
+            "at": row["at"],
+            "actor": row["actor"],
+            "kinds": list((row.get("detail") or {}).get("kinds") or []),
+        }
+        for row in storage.list_audit_log(company_id, 300)
+        if row["action"] in ("upload_applied", "company_import")
+    ][:3]
+    people = storage.admin_list_employees(company_id)
+    return ok(
+        data={
+            "company_name": overview["company_name"],
+            "company_code": overview["company_code"],
+            "employee_count": len(people),
+            "employees": [
+                {"employee_id": p["employee_id"], "name": p["name"], "department": p["department"]}
+                for p in people
+            ],
+            "pending_count": len(pending),
+            "pending_tickets": [
+                {k: t[k] for k in ("ticket_id", "name", "department", "item", "quantity", "status", "created_at")}
+                for t in pending[:5]
+            ],
+            "announcements": storage.list_announcements(company_id)[:HOME_NOTICE_COUNT],
+            "recent_uploads": uploads,
+            "has_data": overview["has_data"],
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_list_notices(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 공지사항 메뉴: 공개 공지만 최신순."""
+    _, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    return ok(data={"announcements": storage.list_announcements(company_id, public_only=True)})
+
+
+# ---------------------------------------------------------------------------
+# 자료실 (UI 전용. LLM 툴로 공개하지 않는다)
+# ---------------------------------------------------------------------------
+
+RESOURCE_MAX_BYTES = 5 * 1024 * 1024
+RESOURCE_CATEGORIES = ("양식", "가이드", "교육 자료", "부서 자료", "기타")
+# 확장자 → (MIME, 파일 앞부분 확인 규칙). MIME은 클라이언트 값을 믿지 않고 확장자로 정한다.
+RESOURCE_TYPES: dict[str, tuple[str, tuple[bytes, ...] | None]] = {
+    "pdf": ("application/pdf", (b"%PDF",)),
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", (b"PK\x03\x04",)),
+    "xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", (b"PK\x03\x04",)),
+    "pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation", (b"PK\x03\x04",)),
+    # 한글 문서: HWP 5.0(OLE 복합 문서) 또는 HWPX(zip)
+    "hwp": ("application/x-hwp", (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", b"PK\x03\x04")),
+    "png": ("image/png", (b"\x89PNG\r\n\x1a\n",)),
+    "jpg": ("image/jpeg", (b"\xff\xd8\xff",)),
+    "jpeg": ("image/jpeg", (b"\xff\xd8\xff",)),
+    "txt": ("text/plain; charset=utf-8", None),
+}
+RESOURCE_ALLOWED_LABEL = "pdf, docx, xlsx, pptx, hwp, png, jpg, txt"
+MSG.update(
+    {
+        "RESOURCE_TYPE": f"허용하지 않는 파일 형식입니다. 올릴 수 있는 형식: {RESOURCE_ALLOWED_LABEL}",
+        "RESOURCE_MISMATCH": "파일 내용이 확장자와 맞지 않습니다. 원본 파일을 다시 선택해 주세요.",
+        "RESOURCE_EMPTY": "빈 파일은 올릴 수 없습니다.",
+        "RESOURCE_URL": "링크는 http:// 또는 https://로 시작하는 주소만 등록할 수 있습니다.",
+        "RESOURCE_TITLE": "제목을 1자 이상 200자 이하로 입력해 주세요.",
+        "RESOURCE_DESCRIPTION": "설명은 1000자 이하로 입력해 주세요.",
+        "RESOURCE_CATEGORY": "카테고리를 목록에서 선택해 주세요.",
+        "RESOURCE_DEPARTMENT": "공개할 부서를 회사에 있는 부서 중에서 선택해 주세요.",
+        "RESOURCE_FILE_REQUIRED": "올릴 파일을 선택해 주세요.",
+        "RESOURCE_SAVED": "자료를 저장했습니다.",
+        "RESOURCE_DELETED": "자료를 삭제했습니다.",
+    }
+)
+
+
+def _size_label(size: int) -> str:
+    return f"{size / (1024 * 1024):.1f}MB" if size >= 1024 * 1024 else f"{max(1, size // 1024)}KB"
+
+
+def safe_file_name(name: str) -> str:
+    """경로·제어 문자를 없애고 글자·숫자·공백·.-_() 만 남긴다. 확장자는 소문자로."""
+    base = re.split(r"[\\/]", str(name or ""))[-1]
+    base = unicodedata.normalize("NFC", base)
+    base = "".join(ch for ch in base if unicodedata.category(ch)[0] != "C")
+    stem, dot, ext = base.rpartition(".")
+    if not dot:
+        stem, ext = base, ""
+    stem = re.sub(r"[^\w\s().-]", "_", stem, flags=re.UNICODE)
+    stem = re.sub(r"\s+", " ", stem).strip(" .") or "file"
+    stem = re.sub(r"_+", "_", stem)[:100]
+    ext = re.sub(r"[^a-z0-9]", "", ext.lower())[:10]
+    return f"{stem}.{ext}" if ext else stem
+
+
+def _check_resource_file(file_name: str, content_base64: str) -> tuple[dict | None, dict | None]:
+    """(저장할 값, 오류 응답). 형식은 확장자 허용 목록 + 파일 앞부분으로 확인한다."""
+    name = safe_file_name(file_name)
+    ext = name.rpartition(".")[2] if "." in name else ""
+    if ext not in RESOURCE_TYPES:
+        return None, fail("RESOURCE_TYPE", MSG["RESOURCE_TYPE"])
+    text = str(content_base64 or "")
+    # base64는 원본보다 4/3배 크다. 디코딩 전에 크기를 먼저 막는다.
+    if len(text) > (RESOURCE_MAX_BYTES * 4) // 3 + 8:
+        return None, fail("RESOURCE_TOO_LARGE", f"파일 크기는 5MB 이하여야 합니다. (선택한 파일: 약 {_size_label(len(text) * 3 // 4)})")
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return None, fail("RESOURCE_MISMATCH", MSG["RESOURCE_MISMATCH"])
+    if not raw:
+        return None, fail("RESOURCE_EMPTY", MSG["RESOURCE_EMPTY"])
+    if len(raw) > RESOURCE_MAX_BYTES:
+        return None, fail("RESOURCE_TOO_LARGE", f"파일 크기는 5MB 이하여야 합니다. (선택한 파일: {_size_label(len(raw))})")
+    mime, signatures = RESOURCE_TYPES[ext]
+    if signatures is not None and not raw.startswith(signatures):
+        return None, fail("RESOURCE_MISMATCH", MSG["RESOURCE_MISMATCH"])
+    if signatures is None:
+        try:
+            raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                raw = raw.decode("cp949").encode("utf-8")  # 한글 윈도 텍스트는 UTF-8로 바꿔 저장
+            except UnicodeDecodeError:
+                return None, fail("RESOURCE_MISMATCH", MSG["RESOURCE_MISMATCH"])
+    return {"file_name": name, "mime_type": mime, "size_bytes": len(raw), "content": raw}, None
+
+
+def _check_resource_url(url: str) -> str | None:
+    value = str(url or "").strip()
+    if (
+        not re.fullmatch(r"https?://[^\s<>\"']{3,1000}", value, flags=re.IGNORECASE)
+        or len(value) > 1000
+    ):
+        return None
+    return value
+
+
+def _company_departments(company_id: str) -> set[str]:
+    return {e["department"] for e in load(company_id, "employees").get("employees", []) if e.get("department")}
+
+
+def _resource_visible_to(resource: dict, department: str) -> bool:
+    """사원에게 보이는 자료: 공개 상태이고, 전체 공개이거나 본인 부서 전용."""
+    if not resource.get("is_public"):
+        return False
+    if resource.get("visibility") == "all":
+        return True
+    return resource.get("visibility") == "department" and resource.get("department") == department
+
+
+def _resource_public(resource: dict) -> dict:
+    return {k: resource.get(k) for k in storage._RESOURCE_META if k != "created_by"}
+
+
+def _policy_shelf(company_id: str) -> list[dict]:
+    """규정집: 카테고리별 묶음. 회사 내규를 먼저, 표준 참고 조문은 뒤에(참고용)."""
+    groups: dict[tuple[bool, str], list[dict]] = {}
+    for policy in load(company_id, "policies").get("policies", []):
+        reference = policy.get("policy_type", "company") != "company"
+        groups.setdefault((reference, policy.get("category") or "기타"), []).append(
+            {k: policy.get(k) for k in ("id", "article", "title", "content")}
+        )
+    ordered = sorted(groups.items(), key=lambda item: item[0][0])  # 안정 정렬: 같은 종류 안은 원래 순서
+    return [
+        {"category": category, "is_reference_only": reference, "policies": rows}
+        for (reference, category), rows in ordered
+    ]
+
+
+@mcp.tool
+@_storage_safe
+def ui_list_resources(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 자료실(사원): 볼 수 있는 자료(파일 바이트 제외), 규정집, 소속 부서 인수인계서.
+
+    다른 부서 전용 자료와 비공개 자료는 목록에 넣지 않는다.
+    """
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    visible = [
+        _resource_public(r) for r in storage.list_resources(company_id)
+        if _resource_visible_to(r, me["department"])
+    ]
+    handovers = [
+        {k: h.get(k) for k in ("handover_id", "title", "summary", "notes", "last_updated")}
+        for h in load(company_id, "handovers").get("handovers", [])
+        if h.get("department") == me["department"]
+    ]
+    return ok(
+        data={
+            "department": me["department"],
+            "resources": visible,
+            "policies": _policy_shelf(company_id),
+            "handovers": handovers,
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_download_resource(company_id: str, employee_id: str, resource_id: str) -> dict:
+    """[UI 전용] 자료 내려받기. 권한(공개 여부·부서)을 서버에서 다시 확인한 뒤 파일 바이트를 준다."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    resource = storage.get_resource(company_id, resource_id, with_content=True)
+    if resource is None or not _resource_visible_to(resource, me["department"]):
+        if resource is not None:
+            log.warning(
+                "resource download denied company_id=%s employee_id=%s resource_id=%s",
+                company_id, me["employee_id"], resource_id,
+            )
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return _resource_download_payload(resource)
+
+
+def _resource_download_payload(resource: dict) -> dict:
+    if resource["kind"] == "link":
+        return ok(data={"kind": "link", "url": resource["url"], "title": resource["title"]})
+    return ok(
+        data={
+            "kind": "file",
+            "file_name": resource["file_name"],
+            "mime_type": resource["mime_type"],
+            "size_bytes": resource["size_bytes"],
+            "content_base64": base64.b64encode(resource["content"] or b"").decode("ascii"),
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_resources(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 자료실 관리: 회사의 모든 자료(비공개 포함, 파일 바이트 제외)."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    return ok(
+        data={
+            "resources": [_resource_public(r) for r in storage.list_resources(company_id)],
+            "categories": list(RESOURCE_CATEGORIES),
+            "departments": sorted(_company_departments(company_id)),
+            "max_bytes": RESOURCE_MAX_BYTES,
+            "allowed_types": RESOURCE_ALLOWED_LABEL,
+        }
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_download_resource(company_id: str, actor_account_id: str, resource_id: str) -> dict:
+    """[UI 전용·관리자] 관리자 확인용 내려받기(비공개 자료 포함, 같은 회사만)."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    resource = storage.get_resource(company_id, resource_id, with_content=True)
+    if resource is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return _resource_download_payload(resource)
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_save_resource(
+    company_id: str,
+    actor_account_id: str,
+    title: str,
+    category: str,
+    kind: Literal["file", "link"],
+    description: str = "",
+    url: str = "",
+    file_name: str = "",
+    content_base64: str = "",
+    visibility: Literal["all", "department"] = "all",
+    department: str = "",
+    is_public: bool = True,
+    resource_id: str | None = None,
+) -> dict:
+    """[UI 전용·관리자] 자료 등록·수정(파일 업로드 또는 링크). 형식·크기 위반은 이유와 함께 거부.
+
+    수정할 때 새 파일을 주지 않으면 기존 파일을 유지한다. 모든 변경은 감사 로그에 남는다.
+    """
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    title = str(title or "").strip()
+    description = str(description or "").strip()
+    if not title or len(title) > 200:
+        return fail("RESOURCE_INVALID", MSG["RESOURCE_TITLE"])
+    if len(description) > 1000:
+        return fail("RESOURCE_INVALID", MSG["RESOURCE_DESCRIPTION"])
+    if category not in RESOURCE_CATEGORIES:
+        return fail("RESOURCE_INVALID", MSG["RESOURCE_CATEGORY"])
+    if visibility not in ("all", "department") or kind not in ("file", "link"):
+        return fail("RESOURCE_INVALID", MSG["INVALID_INPUT"])
+    department = str(department or "").strip()
+    if visibility == "department":
+        if department not in _company_departments(company_id):
+            return fail("RESOURCE_INVALID", MSG["RESOURCE_DEPARTMENT"])
+    else:
+        department = ""
+    existing = storage.get_resource(company_id, resource_id) if resource_id else None
+    if resource_id and existing is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    values: dict[str, Any] = {
+        "title": title,
+        "category": category,
+        "description": description,
+        "kind": kind,
+        "visibility": visibility,
+        "department": department or None,
+        "is_public": bool(is_public),
+    }
+    if kind == "link":
+        checked_url = _check_resource_url(url)
+        if checked_url is None:
+            return fail("RESOURCE_URL", MSG["RESOURCE_URL"])
+        values["url"] = checked_url
+    else:
+        values["url"] = None
+        if content_base64:
+            file_values, error = _check_resource_file(file_name, content_base64)
+            if error:
+                return error
+            values.update(file_values)
+        elif existing is None or existing["kind"] != "file":
+            return fail("RESOURCE_FILE_REQUIRED", MSG["RESOURCE_FILE_REQUIRED"])
+        else:
+            values["content"] = None  # 기존 파일 유지
+    saved = storage.admin_save_resource(company_id, actor_account_id, resource_id, values)
+    if saved is None:
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return ok("SAVED", data={"resource": _resource_public(saved)}, message=MSG["RESOURCE_SAVED"])
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_delete_resource(company_id: str, actor_account_id: str, resource_id: str) -> dict:
+    """[UI 전용·관리자] 자료 삭제(같은 회사만). 감사 로그에 남는다."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    if not storage.admin_delete_resource(company_id, actor_account_id, resource_id):
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return ok("DELETED", message=MSG["RESOURCE_DELETED"])
+
+
+@mcp.tool
+@_storage_safe
+def ui_equipment_options(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 비품 신청 폼: 허용 품목과 품목별 남은 신청 가능 수량(한도 - 보유·처리 중)."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    doc = load(company_id, "tickets")
+    allowed = doc.get("allowed_equipment", [])
+    items = []
+    for equipment in allowed:
+        limited = bool(equipment.get("quantity_limit_defined")) and equipment.get("max_quantity_per_employee") is not None
+        held = _held_quantity(doc.get("tickets", []), me["employee_id"], equipment, allowed)
+        limit = int(equipment["max_quantity_per_employee"]) if limited else None
+        items.append(
+            {
+                "item": equipment["item"],
+                "limit": limit,
+                "held_or_pending": held,
+                "remaining": max(0, limit - held) if limited else None,
+                "policy_reference": equipment.get("policy_reference"),
+            }
+        )
+    return ok(data={"items": items})
+
+
+@mcp.tool
+@_storage_safe
+def ui_preview_ticket(
+    company_id: str, employee_id: str, item: str, quantity: int = 1, purpose: str = ""
+) -> dict:
+    """[UI 전용] 비품 신청 폼의 '신청 내용 확인': 서버 검증(허용 품목·수량 한도)만 하고 저장하지 않는다."""
+    return create_support_ticket(
+        item=item, company_id=company_id, employee_id=employee_id,
+        quantity=quantity, purpose=purpose, request_type="비품", confirmed=False,
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_my_tickets(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 비품 신청 메뉴의 내 신청 내역: 본인 티켓만 최신순, 상태 변경 이력 포함."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    return ok(data={"tickets": storage.list_my_tickets(company_id, me["employee_id"])})
+
+
+@mcp.tool
+@_storage_safe
+def ui_record_page_denied(company_id: str, employee_id: str, page: str) -> dict:
+    """[UI 전용] 사원이 관리자 전용 페이지 주소로 들어온 것을 감사 로그에 남긴다.
+
+    화면은 홈으로 되돌린다. 신원은 세션 값으로만 정하고, page 값은 잘라서 기록만 한다.
+    """
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    safe_page = re.sub(r"[^0-9A-Za-z_\-]", "", str(page or ""))[:40] or "-"
+    storage.record_audit(
+        company_id, me["employee_id"], "page_denied", safe_page, {"reason": "admin_only"}
+    )
+    log.warning(
+        "employee opened admin page company_id=%s employee_id=%s page=%s",
+        company_id,
+        me["employee_id"],
+        safe_page,
+    )
+    return ok("PAGE_DENIED", message=MSG["ADMIN_ONLY"])
 
 
 @mcp.tool

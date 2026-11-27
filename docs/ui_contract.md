@@ -63,6 +63,27 @@ agent.register_company(company_name, admin_password, signup_code="")
 st.session_state.chat = agent.new_session(auth["company_id"], auth["employee_id"])
 ```
 
+### 2-1-1. 새로고침 후 로그인 유지 · 메뉴 주소
+
+```python
+# 로그인 성공 응답 data에 session_token(무작위 43자)이 추가된다. DB에는 SHA-256 해시만 저장.
+agent.resume_session(session_token)
+# → 성공 시 agent.login과 같은 data(session_token 제외). 신원·역할은 서버가 accounts에서 다시 정한다.
+# → 모르는 토큰·30분 무동작·발급 후 12시간 경과·잠금·비활성 계정: {"ok": False, "code": "INVALID_SESSION"}
+agent.logout(session_token)          # 서버에서 토큰 폐기 → {"ok": True, "code": "LOGGED_OUT"}
+agent.change_password(...)           # 성공 시 data = {"session_token": 새 토큰}. 이 계정의 기존 세션은 모두 폐기
+agent.employee_call("ui_record_page_denied", company_id, employee_id, page="data")
+# → 사원이 관리자 메뉴 주소(?page=employees|data)로 들어왔을 때 감사 로그(page_denied)를 남긴다.
+```
+
+- app.py는 토큰을 `og_session` 쿠키(SameSite=Strict, HTTPS면 Secure, 12시간)에만 둔다.
+  새로고침하면 `st.context.cookies`로 읽어 `resume_session`으로 복원한다. 토큰은 `auth`에 넣지 않는다.
+- 관리자가 비밀번호를 초기화하거나 계정을 비활성화하면 그 사원의 세션은 폐기된다
+  (열려 있는 화면은 5분 안의 다음 확인 때 로그아웃).
+- 메뉴는 URL `?page=`와 동기화한다. 사원: `home|notices|library|equipment`,
+  관리자: 위 4개 + `employees|data`. 목록에 없는 값은 홈으로 보낸다. page 값은 신원·권한을 바꾸지 않는다.
+- `employee_call`은 `ui_`로 시작하고 `ui_admin_`이 아닌 툴만 부른다. company_id·employee_id는 세션 값으로 채운다.
+
 ### 2-2. 우측 사이드바 (잔여 연차 + 신청 현황판)
 
 ```python
@@ -83,6 +104,80 @@ agent.get_sidebar(company_id, employee_id)
 - 상태 값은 5개 고정: `접수완료`, `검토중`, `승인`, `반려`, `지급완료` (`승인`은 대시보드에 "지급 예정"으로 표시)
 - `scheduled_date`는 YYYY-MM-DD 또는 `None`입니다. `announcements`는 로그인한 사원의 회사에 공개된 공지만 반환합니다.
 - **다시 불러오는 시점**: 응답의 `tickets_changed`가 `True`일 때 (아래 3장)
+
+### 2-2-1. 홈(사원증) · 관리자 홈 · 직원 화면 미리보기
+
+```python
+agent.employee_call("ui_get_home", company_id, employee_id)
+# → data = {"company_name", "employee": {employee_id, name, department, position|None, job_title|None,
+#            onboarding_week|None}, "annual_leave": {...}, "ticket_counts": {상태: 개수}, "tickets_total",
+#           "latest_ticket": {...}|None, "announcements": [공개 공지 최대 3개], "announcements_total",
+#           "first_week": {"title", "tasks": [소속 부서 인수인계서의 '1주 차 할 일']}}
+agent.admin_call("ui_admin_home", company_id, account_id)
+# → {"company_name", "company_code", "employee_count", "employees": [{employee_id, name, department}],
+#    "pending_count", "pending_tickets": [최대 5건], "announcements": [최근 3개], "recent_uploads": [최근 3건],
+#    "has_data"}
+agent.admin_call("ui_admin_preview_employee", company_id, account_id, employee_id="EMP001")
+# → ui_get_home과 같은 data + {"preview": True}. 같은 회사 사원만(없으면 NOT_FOUND), 감사 로그 preview_employee.
+```
+
+- 미리보기 화면은 읽기 전용이다. 신청 폼·챗봇·더보기 버튼을 그리지 않고, 관리자 세션으로는
+  `ui_confirm_ticket`이 INVALID_SESSION이라 티켓이 만들어지지 않는다.
+
+### 2-2-2. 공지사항 메뉴
+
+```python
+agent.employee_call("ui_list_notices", company_id, employee_id)
+# → {"announcements": [공개 공지만, 최신순 {announcement_id, title, body, is_public, created_at, published_at}]}
+```
+
+- 사원 화면은 7일 이내 공지에 NEW 배지를 붙이고, 제목·본문 검색과 펼쳐 보기를 제공한다.
+- 관리자 "공지사항 관리"는 기존 `ui_admin_list_announcements` / `ui_admin_save_announcement`를 그대로 쓴다
+  (목록에서 바로 수정·공개 전환).
+
+### 2-2-3. 자료실
+
+```python
+agent.employee_call("ui_list_resources", company_id, employee_id)
+# → {"department", "resources": [볼 수 있는 자료(파일 바이트 제외)], "policies": [{category, is_reference_only,
+#    policies: [{id, article, title, content}]}](회사 내규 먼저), "handovers": [소속 부서 인수인계서]}
+agent.employee_call("ui_download_resource", company_id, employee_id, resource_id="RES-…")
+# → 파일: {"kind": "file", "file_name", "mime_type", "size_bytes", "content_base64"}
+#   링크: {"kind": "link", "url", "title"}
+#   다른 부서 전용·비공개·없는 자료: {"ok": False, "code": "NOT_FOUND", "message": MSG["DENIED_OR_NOT_FOUND"]}
+
+agent.admin_call("ui_admin_list_resources", company_id, account_id)
+# → {"resources": [비공개 포함, 바이트 제외], "categories", "departments", "max_bytes", "allowed_types"}
+agent.admin_call("ui_admin_download_resource", company_id, account_id, resource_id=...)
+agent.admin_call("ui_admin_save_resource", company_id, account_id, title=..., category=..., kind="file"|"link",
+                 description="", url="", file_name="", content_base64="", visibility="all"|"department",
+                 department="", is_public=True, resource_id=None)
+# 실패 코드: RESOURCE_TYPE(허용 형식 아님) · RESOURCE_MISMATCH(내용이 확장자와 다름) · RESOURCE_TOO_LARGE(5MB 초과)
+#           RESOURCE_EMPTY · RESOURCE_URL(http/https만) · RESOURCE_INVALID(제목·카테고리·부서) · RESOURCE_FILE_REQUIRED
+agent.admin_call("ui_admin_delete_resource", company_id, account_id, resource_id=...)
+```
+
+- 허용 형식: pdf, docx, xlsx, pptx, hwp, png, jpg(jpeg), txt. MIME은 확장자로 서버가 정하고, 파일 앞부분으로 형식을 확인한다.
+  파일명은 경로·제어 문자를 지우고 정리한다. 변경(등록·수정·삭제)은 모두 감사 로그에 남고, 파일 내용은 남기지 않는다.
+- app.py는 `st.download_button(data=callable)`로 버튼을 누를 때만 파일을 받는다(서버가 그때 권한을 다시 확인).
+
+### 2-2-4. 비품 신청 메뉴
+
+```python
+agent.employee_call("ui_equipment_options", company_id, employee_id)
+# → {"items": [{"item", "limit"|None, "held_or_pending", "remaining"|None, "policy_reference"}]}
+agent.employee_call("ui_preview_ticket", company_id, employee_id, item=..., quantity=1, purpose="")
+# → create_support_ticket(confirmed=False)와 같다: NEEDS_CONFIRMATION + data.preview, 또는 REJECTED. 저장하지 않는다.
+agent.employee_call("ui_confirm_ticket", company_id, employee_id, item=..., quantity=..., purpose=...)
+# → CREATED(티켓 번호) · DUPLICATE_IGNORED · REJECTED. 서버가 한도를 다시 확인한다.
+agent.employee_call("ui_my_tickets", company_id, employee_id)
+# → {"tickets": [본인 티켓 최신순 {ticket_id, type, item, quantity, purpose, status, created_at, updated_at,
+#    scheduled_date, history: [{at, from, to, note}]}]}   (처리자 아이디는 넣지 않는다)
+```
+
+- 관리자 "비품 관리"는 기존 `ui_admin_list_tickets` · `ui_admin_save_equipment` · `ui_admin_update_ticket`을 그대로 쓴다.
+- 챗봇용 LLM 툴 `get_my_tickets`(인자 없음, 세션 값 주입)가 추가되었다. LLM_TOOLS는 6개.
+  `scheduled_date`가 없으면 지급 예정일을 지어내지 않도록 시스템 프롬프트에 적었다.
 
 ### 2-3. 채팅 입력
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
 import html
 import io
+import json
 import logging
+import re
 import time
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -31,7 +35,26 @@ POST_LOGIN_ERROR = (
 CONNECTION_ERROR = "사내 시스템 연결이 일시적으로 원활하지 않습니다."
 _SAFE_MESSAGE_ERRORS = (KeyError, IndexError, AttributeError, TypeError, ValueError)
 
-st.set_page_config(page_title="오피스 지니 | 신입사원 온보딩", layout="wide")
+_PWA_ICON = PROJECT_ROOT / "pwa" / "icon-192.png"
+st.set_page_config(
+    page_title="오피스 지니 | 신입사원 온보딩",
+    page_icon=str(_PWA_ICON) if _PWA_ICON.is_file() else None,
+    layout="wide",
+)
+PWA_MARKER = "<!-- officegenie-pwa:start -->"
+
+
+@st.cache_resource
+def _check_pwa_setup() -> bool:
+    """서버 시작 시 한 번: PWA 태그가 Streamlit 정적 폴더에 들어갔는지 확인한다(화면 오류는 아님)."""
+    static_dir = Path(st.__file__).resolve().parent / "static"
+    try:
+        applied = PWA_MARKER in (static_dir / "index.html").read_text("utf-8") and (static_dir / "sw.js").is_file()
+    except OSError:
+        applied = False
+    if not applied:
+        log.warning("PWA 설정이 적용되지 않았습니다. python scripts/pwa_setup.py 실행 필요")
+    return applied
 
 WELCOME_TEXT = "안녕하세요. 온보딩이나 비품 지급에 대해 궁금한 점을 물어보세요."
 SUGGESTED_QUESTION = "제 모니터는 언제 받을 수 있나요?"
@@ -83,6 +106,11 @@ _company_code_copy = st.components.v2.component(
     """,
 )
 SESSION_TIMEOUT_SEC = 30 * 60  # 30분 무동작 시 자동 로그아웃
+# 새로고침 후 로그인 유지: 쿠키에는 서버가 만든 무작위 토큰만 둔다(DB에는 해시만 저장).
+SESSION_COOKIE = "og_session"
+SESSION_COOKIE_MAX_AGE = 12 * 60 * 60
+SESSION_KEEPALIVE_SEC = 5 * 60
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,100}")
 CHAT_FAILURE_CODES = {
     "FALLBACK",
     "LLM_UNAVAILABLE",
@@ -1814,6 +1842,483 @@ def _render_styles() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _render_shell_styles() -> None:
+    """메뉴형 화면 공통 스타일. 팀 디자인 토큰(_render_styles의 :root)을 그대로 쓴다."""
+    # st.html에 <style>만 넣으면 화면 자리를 차지하지 않는다(헤더 위 빈 줄 방지).
+    st.html(
+        r"""
+        <style>
+        :root {
+            /* 기존 값에 이름만 붙인 토큰. 새 색은 추가하지 않는다. */
+            --blue-soft: #EDF3FD;
+            --blue-hover: #315EA9;
+            --radius-card: 20px;
+            --radius-section: 16px;
+            --radius-control: 10px;
+            --radius-pill: 999px;
+            --shadow-card: 0 12px 32px rgba(32, 45, 64, 0.06);
+            --shadow-soft: 0 1px 3px rgba(32, 45, 64, 0.018);
+            --shadow-panel: 0 15px 42px rgba(37, 57, 87, 0.17);
+            --shadow-fab: 0 7px 17px rgba(56, 104, 190, 0.27);
+            --tabbar-height: 64px;
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        /* 한글은 어절 단위로 줄바꿈하고, 긴 영문·숫자는 넘치지 않게 끊는다. */
+        [data-testid="stAppViewContainer"] :is(p, h1, h2, h3, h4, li, span, label, summary, dd, dt, td, th, button) {
+            word-break: keep-all;
+            overflow-wrap: break-word;
+        }
+        .st-key-cookie_sync { position: absolute !important; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+
+        /* ---- 상단 헤더: 로고 + 메뉴 + 사용자 ---- */
+        .st-key-dashboard_root .st-key-site_header {
+            position: sticky; top: 0; z-index: 999;
+            border-width: 0 0 1px 0;
+        }
+        .st-key-top_nav { gap: 4px !important; flex: 0 1 auto; min-width: 0; }
+        .st-key-top_nav button {
+            min-height: 44px; padding: 0 16px !important;
+            border: 0 !important; border-radius: var(--radius-pill) !important;
+            background: transparent !important; color: var(--muted) !important;
+            white-space: nowrap;
+        }
+        .st-key-top_nav button p { font-size: 15px; font-weight: 600; }
+        .st-key-top_nav button:hover { background: var(--page) !important; color: var(--title) !important; }
+        .st-key-top_nav button[data-testid="stBaseButton-primary"] {
+            background: var(--blue-soft) !important; color: var(--blue) !important;
+        }
+        .st-key-top_nav button[data-testid="stBaseButton-primary"] p { font-weight: 700; }
+        .st-key-header_user { gap: 12px !important; }
+        .header-user { color: var(--body); font-size: 14px; font-weight: 600; white-space: nowrap; }
+        .st-key-header_user [data-testid="stMarkdownContainer"] { margin-bottom: 0; }
+        .st-key-header_user .st-key-logout_button button {
+            min-height: 36px !important; padding: 4px 18px !important;
+            border: 0 !important; border-radius: var(--radius-pill) !important;
+            background: var(--blue-soft) !important; color: var(--blue) !important; white-space: nowrap;
+        }
+        .st-key-header_user .st-key-logout_button button p { font-size: 13px; }
+
+        /* ---- 본문 ---- */
+        .st-key-page_main {
+            width: min(1280px, calc(100% - 2 * var(--site-header-gutter))) !important;
+            margin: 0 auto !important;
+            padding: 40px 0 72px !important;
+            gap: 20px;
+        }
+        .st-key-page_main .dashboard-main { width: 100%; padding-top: 0; }
+        .page-heading h1 {
+            margin: 0; padding: 0 !important; color: var(--title);
+            font-size: clamp(24px, 2.4vw, 29px); font-weight: 720; letter-spacing: -0.8px; line-height: 1.35;
+        }
+        .page-heading p { margin: 8px 0 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
+        .st-key-page_main [data-testid="stMarkdownContainer"]:has(> .page-heading) { margin-bottom: 4px; }
+        .st-key-page_main [data-testid="stTabs"] [role="tablist"] { gap: 8px; }
+        .st-key-page_main [data-testid="stTabs"] [role="tab"] { min-height: 48px; padding-inline: 14px; color: var(--muted); }
+        .st-key-page_main [data-testid="stTabs"] [role="tab"][aria-selected="true"] { color: var(--blue); font-weight: 700; }
+        .st-key-page_main [data-testid="stTabs"] [role="tabpanel"] { padding-top: 18px; }
+
+        /* ---- 홈: 사원증 + 위젯 ---- */
+        .st-key-home_layout {
+            display: grid !important;
+            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+            align-items: start;
+            gap: 24px;
+        }
+        .st-key-home_id_column { position: sticky; top: 104px; }
+        .id-card {
+            overflow: hidden;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-card);
+            box-shadow: var(--shadow-card);
+        }
+        .id-card-top {
+            display: flex; justify-content: space-between; align-items: center; gap: 12px;
+            min-height: 56px; padding: 14px 22px;
+            background: var(--blue); color: #fff;
+        }
+        .id-company { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; min-width: 0; }
+        .id-kind { flex: 0 0 auto; font-size: 12px; font-weight: 600; opacity: .85; letter-spacing: .08em; }
+        .id-card-body { display: flex; flex-direction: column; align-items: center; padding: 28px 24px 22px; text-align: center; }
+        .id-avatar {
+            width: 104px; height: 104px; display: grid; place-items: center;
+            border-radius: 50%; background: var(--blue-soft); color: var(--blue);
+            font-size: 42px; font-weight: 750; letter-spacing: -1px;
+            border: 4px solid var(--card); box-shadow: 0 0 0 1px var(--input-line);
+        }
+        h2.id-name {
+            margin: 18px 0 0; padding: 0 !important; color: var(--title);
+            font-size: 28px; font-weight: 750; letter-spacing: -0.8px; line-height: 1.3;
+        }
+        .id-meta { margin: 6px 0 0; color: var(--body); font-size: 15px; font-weight: 600; }
+        .id-job { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+        .id-number {
+            display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px;
+            margin-top: 18px; padding: 10px 14px; width: 100%; box-sizing: border-box;
+            border-radius: var(--radius-control); background: var(--page);
+        }
+        .id-number span { color: var(--muted); font-size: 13px; }
+        .id-number strong { color: var(--title); font-size: 16px; letter-spacing: .06em; }
+        .id-badge {
+            display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px;
+            border-radius: var(--radius-pill); background: var(--amber-bg); color: var(--amber) !important;
+            font-size: 12px !important; font-weight: 700; letter-spacing: 0 !important;
+        }
+        .id-code { width: 100%; margin-top: 18px; color: var(--title); }
+        .id-barcode { display: block; width: 100%; height: 40px; opacity: .82; }
+        .id-code small { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+
+        .st-key-home_widgets {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+            gap: 20px;
+        }
+        [class*="st-key-home_widget_"], .st-key-admin_company_card {
+            box-sizing: border-box;
+            min-height: 220px;
+            padding: 22px 22px 14px;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 17px;
+            box-shadow: var(--shadow-soft);
+            gap: 0 !important;
+        }
+        [class*="st-key-home_widget_"] [data-testid="stMarkdownContainer"] { margin-bottom: 0; }
+        .widget-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+        .widget-head h3 { margin: 0; padding: 0 !important; color: var(--title); font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+        .widget-note { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+        .widget-label { margin: 14px 0 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+        .status-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .status-chips .status-badge { margin-left: 0; min-height: 28px; }
+        .equipment-list.compact { margin-top: 4px; border-top: 0; }
+        .equipment-list.compact .equipment-row { min-height: 56px; }
+        ul.widget-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid #E7ECF3; }
+        ul.widget-list .notice-row { min-height: 52px; font-size: 14px; }
+        .notice-title { min-width: 0; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .new-badge {
+            display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px;
+            border-radius: var(--radius-pill); background: var(--blue); color: #fff;
+            font-size: 10px; font-style: normal; font-weight: 750; letter-spacing: .04em;
+        }
+        ul.task-list { list-style: none; margin: 10px 0 0; padding: 0; }
+        ul.task-list li { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; color: var(--body); font-size: 14px; line-height: 1.5; }
+        .task-box { flex: 0 0 16px; width: 16px; height: 16px; margin-top: 3px; border: 1.5px solid #B8C6DB; border-radius: 5px; background: var(--card); }
+        [class*="st-key-home_more_"] { margin-top: auto !important; align-self: flex-end; }
+        [class*="st-key-home_more_"] button { min-height: 44px; padding: 0 6px !important; color: var(--blue) !important; }
+        [class*="st-key-home_more_"] button p { font-size: 14px; font-weight: 600; }
+        .dashboard-help { margin: 0; color: #71819A; font-size: 13px; }
+
+        /* ---- 관리자 홈 ---- */
+        .st-key-admin_home_layout {
+            display: grid !important;
+            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+            align-items: start; gap: 24px;
+        }
+        .st-key-admin_company_card { min-height: 0; padding: 24px; border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+        h2.company-name { margin: 4px 0 0; padding: 0 !important; color: var(--title); font-size: 24px; font-weight: 750; letter-spacing: -0.6px; }
+        .st-key-admin_company_card .st-key-home_company_code { margin-top: 18px; }
+        .st-key-home_widget_preview [data-testid="stSelectbox"] { margin-top: 12px; }
+        .st-key-preview_open button { min-height: 44px; }
+        .st-key-preview_banner {
+            position: sticky; top: 80px; z-index: 5;
+            padding: 10px 16px; border-radius: var(--radius-control);
+            background: var(--amber-bg); border: 1px solid #EED9AE;
+        }
+        .preview-label { color: var(--amber); font-size: 14px; font-weight: 700; }
+        .st-key-preview_close button { min-height: 40px; background: var(--card); border-color: #EED9AE; color: var(--amber); }
+
+        /* ---- 공지사항 ---- */
+        .st-key-notice_board, .st-key-library_board, .st-key-equipment_board {
+            padding: 24px; background: var(--card); border: 1px solid var(--line);
+            border-radius: var(--radius-section); box-shadow: var(--shadow-soft); gap: 12px !important;
+        }
+        .list-count { margin: 4px 0 8px; color: var(--muted); font-size: 13px; }
+        .notice-page-entry summary.notice-row { min-height: 60px; padding: 4px 4px; }
+        .notice-page-entry summary.notice-row:hover { background: var(--page); }
+        .notice-page-entry[open] summary .notice-title { color: var(--blue); font-weight: 650; }
+        .notice-page-entry .notice-body { padding: 4px 4px 20px; line-height: 1.7; }
+        .empty-state {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            padding: 40px 16px; text-align: center; color: var(--muted); font-size: 14px;
+        }
+        .empty-state strong { color: var(--body); font-size: 15px; }
+        [class*="st-key-notice_admin_row_"] {
+            min-height: 64px; padding: 6px 4px; border-bottom: 1px solid #E7ECF3;
+        }
+        [class*="st-key-notice_admin_row_"] > div:first-child { flex: 1 1 auto !important; min-width: 0; }
+        .notice-admin-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .notice-admin-title strong { color: var(--title); font-size: 15px; font-weight: 600; }
+        .notice-admin-title span { color: var(--muted); font-size: 12px; }
+        [class*="st-key-notice_admin_row_"] button { min-height: 40px; white-space: nowrap; }
+        .st-key-notice_inline_form {
+            margin: 8px 0 12px; padding: 18px 20px; border-radius: 12px;
+            background: var(--page); border: 1px solid var(--input-line);
+        }
+
+        /* ---- 자료실 ---- */
+        [class*="st-key-lib_"][class*="_row_"], [class*="st-key-admin_res_row_"] {
+            min-height: 72px; padding: 10px 4px; border-bottom: 1px solid #E7ECF3;
+        }
+        [class*="st-key-lib_"][class*="_row_"] > div:nth-child(2),
+        [class*="st-key-admin_res_row_"] > div:nth-child(2) { flex: 1 1 auto !important; min-width: 0; }
+        .resource-icon {
+            display: inline-grid; place-items: center; width: 44px; height: 44px; flex: 0 0 44px;
+            border-radius: 11px; background: var(--blue-soft); color: var(--blue);
+            font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+        }
+        .resource-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .resource-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .resource-title strong { color: var(--title); font-size: 15px; font-weight: 650; }
+        .resource-chip {
+            display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
+            border-radius: var(--radius-pill); background: var(--page); color: var(--muted);
+            font-size: 11px; font-weight: 650;
+        }
+        .resource-chip.dept { background: var(--green-bg); color: var(--green); }
+        .resource-chip.muted { background: #EEF2F6; color: var(--muted); }
+        .resource-desc { margin: 0; color: var(--body); font-size: 13px; line-height: 1.5; }
+        .resource-meta { color: var(--muted); font-size: 12px; }
+        [class*="st-key-lib_"] :is(button, a), [class*="st-key-admin_res_"] :is(button, a) { min-height: 40px; white-space: nowrap; }
+        details.handover-card, details.policy-group {
+            margin: 8px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+        }
+        details.handover-card > summary, details.policy-group > summary {
+            display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 8px 14px;
+            cursor: pointer; list-style: none;
+        }
+        details.handover-card > summary::-webkit-details-marker,
+        details.policy-group > summary::-webkit-details-marker { display: none; }
+        details.policy-group > summary strong { color: var(--title); font-size: 15px; }
+        details.policy-group > summary .card-count { margin-left: auto; padding-top: 0; }
+        details.policy-group .notice-list { margin: 0 14px 8px; }
+        .handover-body { padding: 0 18px 16px 70px; color: var(--body); font-size: 14px; }
+        .handover-body h4 { margin: 12px 0 4px; padding: 0 !important; font-size: 14px; color: var(--title); }
+        .handover-body ul { margin: 0; padding-left: 18px; line-height: 1.7; }
+        .ref-badge, .own-badge {
+            display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
+            border-radius: var(--radius-pill); font-size: 11px; font-style: normal; font-weight: 700;
+        }
+        .ref-badge { background: var(--amber-bg); color: var(--amber); }
+        .own-badge { background: var(--blue-soft); color: var(--blue); }
+        .st-key-resource_form {
+            margin: 8px 0 16px; padding: 18px 20px; border-radius: 12px;
+            background: var(--page); border: 1px solid var(--input-line);
+        }
+        .st-key-resource_delete_confirm {
+            padding: 10px 14px; border-radius: var(--radius-control);
+            background: var(--amber-bg); border: 1px solid #EED9AE;
+        }
+
+        /* ---- 비품 신청 ---- */
+        .st-key-equipment_layout {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+            align-items: start; gap: 24px;
+        }
+        .st-key-equipment_form, .st-key-equipment_history {
+            padding: 22px; background: var(--card); border: 1px solid var(--line);
+            border-radius: var(--radius-section); box-shadow: var(--shadow-soft); gap: 14px !important;
+        }
+        .st-key-equipment_form [data-testid="stPills"] button { min-height: 44px; padding-inline: 16px; }
+        .st-key-equipment_form :is([data-testid="stNumberInput"] input, [data-testid="stTextInput"] input) { min-height: 44px; }
+        .st-key-equipment_confirm_card {
+            padding: 16px 18px; border-radius: 12px; background: var(--blue-soft);
+            border: 1px solid var(--input-line); gap: 10px !important;
+        }
+        .st-key-equipment_confirm_card button, .st-key-eq_check button { min-height: 48px; }
+        .st-key-equipment_confirm_card .ticket-check-title { color: var(--title); font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+        .st-key-equipment_confirm_card .ticket-check-details {
+            display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px;
+            color: var(--body); font-size: 14px;
+        }
+        .st-key-equipment_confirm_card .ticket-check-details strong { color: var(--title); font-weight: 600; overflow-wrap: anywhere; }
+        .st-key-equipment_confirm_card .ticket-warning { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: var(--amber-bg); color: var(--amber); font-size: 13px; }
+        details.my-ticket { border-bottom: 1px solid #E7ECF3; }
+        details.my-ticket > summary {
+            display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 6px 2px;
+            cursor: pointer; list-style: none;
+        }
+        details.my-ticket > summary::-webkit-details-marker { display: none; }
+        details.my-ticket > summary .resource-text { flex: 1 1 auto; }
+        .my-ticket-body { padding: 0 4px 14px 54px; }
+        ol.ticket-timeline { list-style: none; margin: 8px 0 0; padding: 0; position: relative; }
+        ol.ticket-timeline::before { content: ""; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+        .timeline-step { position: relative; display: flex; gap: 12px; padding: 6px 0; }
+        .timeline-step > i { position: relative; z-index: 1; flex: 0 0 12px; height: 12px; margin-top: 4px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px var(--card); }
+        .timeline-step strong { color: var(--title); font-size: 14px; font-weight: 650; margin-right: 8px; }
+        .timeline-step time { color: var(--muted); font-size: 12px; }
+        .timeline-step p { margin: 2px 0 0; color: var(--body); font-size: 13px; }
+        .timeline-step.status-paid { color: var(--green); }
+        .timeline-step.status-scheduled { color: var(--amber); }
+        .timeline-step.status-received, .timeline-step.status-review { color: #5A77A9; }
+        .timeline-step.status-rejected { color: #A34D46; }
+
+        /* ---- 반응형: 위 영역들의 좁은 화면 규칙(기본 규칙 뒤에 둔다) ---- */
+        @media (max-width: 1023.98px) {
+            .st-key-home_widgets { grid-template-columns: minmax(0, 1fr); }
+        }
+        @media (max-width: 767.98px) {
+            .st-key-home_layout, .st-key-admin_home_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            .st-key-home_id_column { position: static; }
+            .id-card-body { padding: 22px 20px 18px; }
+            .id-avatar { width: 88px; height: 88px; font-size: 36px; }
+            h2.id-name { font-size: 25px; }
+            .st-key-home_widgets { gap: 14px; }
+            [class*="st-key-home_widget_"] { min-height: 0; padding: 18px 18px 8px; }
+            .st-key-preview_banner { top: 60px; }
+            .st-key-notice_board, .st-key-library_board, .st-key-equipment_board { padding: 16px; }
+            [class*="st-key-notice_admin_row_"] { flex-wrap: wrap !important; }
+            [class*="st-key-notice_admin_row_"] > div:first-child { flex-basis: 100% !important; }
+            [class*="st-key-lib_"][class*="_row_"], [class*="st-key-admin_res_row_"] { flex-wrap: wrap !important; }
+            [class*="st-key-lib_"][class*="_row_"] > div:nth-child(2),
+            [class*="st-key-admin_res_row_"] > div:nth-child(2) { flex-basis: calc(100% - 60px) !important; }
+            .handover-body { padding-left: 18px; }
+            .st-key-equipment_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            .st-key-equipment_form, .st-key-equipment_history { padding: 16px; }
+            .my-ticket-body { padding-left: 4px; }
+        }
+
+        /* ---- 모바일 하단 탭바: PC에서는 숨긴다 ---- */
+        .st-key-bottom_tabs { display: none !important; }
+
+        @media (max-width: 767.98px) {
+            .st-key-top_nav { display: none !important; }
+            .st-key-dashboard_root .st-key-site_header { min-height: 60px; }
+            .st-key-header_user { gap: 8px !important; }
+            .st-key-header_user .st-key-logout_button button { min-height: 36px !important; padding: 4px 12px !important; }
+            .st-key-page_main {
+                padding: 24px 0 calc(var(--tabbar-height) + 104px + var(--safe-bottom)) !important;
+                gap: 16px;
+            }
+            .page-heading p { font-size: 14px; }
+            .st-key-bottom_tabs {
+                display: flex !important;
+                position: fixed !important;
+                z-index: 10000;
+                left: 0; right: 0; bottom: 0;
+                margin: 0 !important;
+                padding: 4px 4px calc(4px + var(--safe-bottom)) !important;
+                background: var(--card);
+                border-top: 1px solid var(--line);
+                box-shadow: 0 -4px 16px rgba(32, 45, 64, 0.06);
+                gap: 0 !important;
+            }
+            .st-key-bottom_tabs > div { flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; }
+            .st-key-bottom_tabs button {
+                width: 100%; min-height: 56px !important; padding: 4px 2px !important;
+                display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+                border: 0 !important; border-radius: 12px !important;
+                background: transparent !important; color: var(--muted) !important;
+            }
+            .st-key-bottom_tabs button > div, .st-key-bottom_tabs button > span { flex-direction: column; gap: 2px; }
+            .st-key-bottom_tabs button [data-testid="stIconMaterial"] { font-size: 24px; margin: 0 !important; }
+            .st-key-bottom_tabs button p { font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+            .st-key-bottom_tabs button[data-testid="stBaseButton-primary"] { color: var(--blue) !important; }
+            .st-key-bottom_tabs button[data-testid="stBaseButton-primary"] p { font-weight: 750; }
+
+            /* 챗봇 버튼은 탭바 위로 올린다(겹침 방지). */
+            .st-key-chat_fab {
+                right: 16px !important;
+                bottom: calc(var(--tabbar-height) + 16px + var(--safe-bottom)) !important;
+                width: 56px !important; height: 56px !important; min-width: 56px !important;
+            }
+            .st-key-chat_fab [data-testid="stButton"],
+            .st-key-chat_fab button {
+                width: 56px !important; min-width: 56px !important; max-width: 56px !important;
+                height: 56px !important; min-height: 56px !important;
+            }
+            /* 챗봇은 화면 전체를 덮는 시트로 연다. */
+            .st-key-chat_panel {
+                inset: 0 !important;
+                z-index: 10003 !important;
+                width: 100vw !important; min-width: 0 !important; max-width: none !important;
+                height: 100dvh !important; min-height: 0 !important; max-height: none !important;
+                border: 0 !important; border-radius: 0 !important;
+                padding-bottom: var(--safe-bottom) !important;
+            }
+            .st-key-chat_scroll { height: auto !important; flex: 1 1 auto !important; }
+            .st-key-chat_close_button { width: 44px !important; height: 44px !important; top: 15px !important; }
+            .st-key-chat_close_button [data-testid="stButton"],
+            .st-key-chat_close_button button {
+                width: 44px !important; min-width: 44px !important; height: 44px !important; min-height: 44px !important;
+            }
+        }
+
+        /* ==== 화면 점검 후 다듬기 ==== */
+        /* 헤더: 사용자 이름과 로그아웃 버튼 세로 정렬 */
+        .st-key-header_user [data-testid="stMarkdownContainer"] p { margin: 0 !important; line-height: 36px; }
+        .st-key-header_user [data-testid="stElementContainer"] { display: flex; align-items: center; }
+        /* Streamlit은 마크다운 마지막 문단에 음수 아래 여백을 준다 → 작은 글씨 문단이 버튼과 겹치지 않게 */
+        [data-testid="stMarkdownContainer"] :is(p.widget-note, p.list-count, p.widget-label, p.resource-desc, p.dashboard-help) {
+            margin-bottom: 0 !important;
+        }
+        [data-testid="stMarkdownContainer"] p.widget-note { font-size: 13px; line-height: 1.5; }
+        [data-testid="stMarkdownContainer"] p.list-count { font-size: 13px; }
+        [data-testid="stMarkdownContainer"] p.widget-label { font-size: 12px; }
+        [data-testid="stMarkdownContainer"] p.resource-desc { font-size: 13px; line-height: 1.5; margin: 0; }
+        [data-testid="stMarkdownContainer"] p.dashboard-help { font-size: 13px; }
+        .st-key-equipment_confirm_card p.widget-note { margin: 12px 0 10px !important; }
+        .manager-subtitle { font-size: 14px !important; }
+        .notice-page-entry .notice-body { font-size: 15px; }
+        .my-ticket .resource-meta { display: block; line-height: 1.5; }
+        .new-badge.private { background: #EEF2F6; color: var(--muted); }
+        /* 고정 탭바에 가려지지 않게: 포커스·스크롤 이동 시 아래 여유 */
+        html, [data-testid="stMain"], [data-testid="stAppViewContainer"] {
+            scroll-padding-bottom: calc(var(--tabbar-height) + 24px + var(--safe-bottom));
+        }
+        /* 관리자 표: 좁은 화면에서도 한 줄 유지, 가로 스크롤 */
+        .st-key-manager_table [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; }
+        .st-key-manager_table [data-testid="stColumn"] { min-width: 0 !important; width: auto !important; }
+        .st-key-preview_banner { scroll-margin-top: 100px; }
+
+        /* 모바일 하단 탭: 아이콘 위, 글자 아래 */
+        .st-key-bottom_tabs button > div,
+        .st-key-bottom_tabs button [data-testid="stMarkdownContainer"] { min-width: 0; }
+        .st-key-bottom_tabs button span[data-has-shortcut] { display: flex !important; flex-direction: column !important; align-items: center; gap: 2px; }
+        .st-key-bottom_tabs button p { overflow: hidden; text-overflow: clip; }
+
+        @media (max-width: 767.98px) {
+            /* 자료 행: 버튼을 아이콘 아래가 아닌 글자 줄에 맞춘다 */
+            [class*="st-key-lib_"][class*="_row_"] > div:nth-child(n+3),
+            [class*="st-key-admin_res_row_"] > div:nth-child(3) { margin-left: 56px !important; }
+            /* 챗봇 시트: 대화 영역이 남은 높이를 채우고 입력창은 맨 아래 */
+            .st-key-chat_panel > * { flex: 0 0 auto !important; }
+            .st-key-chat_panel > :has(.st-key-chat_scroll) {
+                flex: 1 1 auto !important; min-height: 0 !important; display: flex !important; flex-direction: column !important;
+            }
+            .st-key-chat_panel > :has(.st-key-chat_scroll) > * { flex: 1 1 auto !important; min-height: 0 !important; }
+            .st-key-chat_scroll { max-height: none !important; }
+            .st-key-chat_footer { flex: 0 0 auto !important; padding-bottom: calc(20px + var(--safe-bottom)) !important; }
+            .st-key-chat_panel { padding-bottom: 0 !important; }
+        }
+
+        /* 관리자는 메뉴가 6개라 1180px 미만에서는 하단 탭바를 쓴다(태블릿 헤더 넘침 방지) */
+        @media (max-width: 1179.98px) {
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-top_nav { display: none !important; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs {
+                display: flex !important; position: fixed !important; z-index: 10000;
+                left: 0; right: 0; bottom: 0; margin: 0 !important;
+                padding: 4px 4px calc(4px + var(--safe-bottom)) !important;
+                background: var(--card); border-top: 1px solid var(--line);
+                box-shadow: 0 -4px 16px rgba(32, 45, 64, 0.06); gap: 0 !important;
+            }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs > div { flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs button {
+                width: 100%; min-height: 56px !important; padding: 4px 2px !important;
+                border: 0 !important; border-radius: 12px !important; background: transparent !important; color: var(--muted) !important;
+            }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs button p { font-size: 12px; font-weight: 600; white-space: nowrap; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-bottom_tabs button[data-testid="stBaseButton-primary"] { color: var(--blue) !important; }
+            .st-key-dashboard_root:has(.st-key-nav_employees) .st-key-page_main {
+                padding-bottom: calc(var(--tabbar-height) + 48px + var(--safe-bottom)) !important;
+            }
+        }
+        </style>
+        """
+    )
+
+
 def _touch_activity() -> None:
     st.session_state.last_activity = time.monotonic()
 
@@ -1826,7 +2331,10 @@ def _session_expired() -> bool:
 
 
 def _logout(notice: str = "") -> None:
-    """세션 전체(신원·대화·대기 중인 요청)를 지운다."""
+    """세션 전체(신원·대화·대기 중인 요청)를 지우고 서버의 로그인 세션도 폐기한다."""
+    token = st.session_state.get("session_token")
+    if token:
+        get_agent().logout(token)  # 연결 실패는 call_tool이 응답으로 돌려준다
     previous_screen = st.session_state.get("_screen_slot")
     for key in list(st.session_state.keys()):
         del st.session_state[key]
@@ -1834,12 +2342,90 @@ def _logout(notice: str = "") -> None:
         # Keep only the previous display slot so its content can be removed on logout.
         st.session_state["_screen_slot"] = previous_screen
     st.session_state.auth_view = "login"
+    # 이 연결의 쿠키 값은 이미 폐기되었으므로 다시 복원하지 않고, 브라우저 쿠키도 지운다.
+    st.session_state.resume_checked = True
+    st.session_state.cookie_action = ("clear", "")
     if notice:
         st.session_state.auth_notice = notice
 
 
+def _session_cookie_token() -> str:
+    try:
+        token = st.context.cookies.get(SESSION_COOKIE) or ""
+    except Exception:  # AppTest 등 쿠키가 없는 실행 환경
+        return ""
+    return token if isinstance(token, str) and _TOKEN_RE.fullmatch(token) else ""
+
+
+def _restore_login() -> None:
+    """새로고침 후: 브라우저 쿠키의 세션 토큰을 서버에서 확인해 로그인 상태를 되살린다.
+
+    쿠키에는 무작위 토큰만 있고, 신원·역할은 서버가 accounts에서 다시 정한다.
+    """
+    state = st.session_state
+    if state.get("auth") or state.get("resume_checked"):
+        return
+    state.resume_checked = True
+    token = _session_cookie_token()
+    if not token:
+        return
+    result = get_agent().resume_session(token)
+    if not result.get("ok"):
+        if result.get("code") == "INVALID_SESSION":
+            state.cookie_action = ("clear", "")
+        return
+    try:
+        auth = _auth_from_login(result["data"])
+    except (KeyError, TypeError) as exc:
+        _log_post_login_failure("resume_response", exc, None)
+        return
+    state.auth = auth
+    state.session_token = token
+    state.session_checked_at = time.monotonic()
+    _touch_activity()
+
+
+def _session_still_valid(agent: OfficeGenieAgent) -> bool:
+    """몇 분에 한 번 서버 세션을 확인·연장한다. 관리자가 비밀번호를 초기화했거나
+    계정이 비활성화되면 False. 일시적인 연결 오류로는 로그아웃시키지 않는다."""
+    token = st.session_state.get("session_token")
+    if not token:
+        return True
+    if time.monotonic() - st.session_state.get("session_checked_at", 0) < SESSION_KEEPALIVE_SEC:
+        return True
+    result = agent.resume_session(token)
+    if result.get("code") == "SERVER_UNAVAILABLE":
+        return True
+    st.session_state.session_checked_at = time.monotonic()
+    return bool(result.get("ok"))
+
+
+def _apply_cookie_action() -> None:
+    """로그인·로그아웃 직후 한 번만 브라우저 쿠키를 쓰거나 지운다.
+
+    쿠키 값은 서버가 만든 무작위 토큰뿐이다. SameSite=Strict, HTTPS면 Secure.
+    """
+    action = st.session_state.pop("cookie_action", None)
+    if not action:
+        return
+    kind, token = action
+    if kind == "set" and _TOKEN_RE.fullmatch(token or ""):
+        cookie = f"{SESSION_COOKIE}={token}; Path=/; Max-Age={SESSION_COOKIE_MAX_AGE}; SameSite=Strict"
+    else:
+        cookie = f"{SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Strict"
+    with st.container(key="cookie_sync", height=1, border=False):
+        st.html(
+            f"<script>document.cookie = {json.dumps(cookie)} + "
+            "(location.protocol === 'https:' ? '; Secure' : '');</script>",
+            unsafe_allow_javascript=True,
+        )
+
+
 def _on_logout_click() -> None:
     _logout()
+    # 직접 로그아웃하면 다음 사람이 홈에서 시작한다(시간 초과 로그아웃은 보던 메뉴를 유지).
+    if "page" in st.query_params:
+        del st.query_params["page"]
 
 
 @st.fragment(run_every=60)
@@ -1849,39 +2435,146 @@ def _idle_watch() -> None:
         st.rerun(scope="app")
 
 
-def _brand_html() -> str:
-    return (
+# ---------------------------------------------------------------------------
+# 메뉴와 화면 이동
+# 현재 메뉴는 URL 쿼리 ?page= 와 동기화한다(새로고침·뒤로가기·바로가기).
+# page 값은 "어떤 화면을 보여 줄지"만 정한다. 신원·권한은 세션(auth)과 서버가 정한다.
+# ---------------------------------------------------------------------------
+
+# (page, PC 메뉴 이름, 모바일 탭 이름, 아이콘)
+EMPLOYEE_NAV = (
+    ("home", "홈", "홈", ":material/badge:"),
+    ("notices", "공지사항", "공지", ":material/campaign:"),
+    ("library", "자료실", "자료실", ":material/folder_open:"),
+    ("equipment", "비품 신청", "비품", ":material/inventory_2:"),
+)
+ADMIN_NAV = (
+    ("home", "홈", "홈", ":material/space_dashboard:"),
+    ("notices", "공지사항 관리", "공지", ":material/campaign:"),
+    ("library", "자료실 관리", "자료실", ":material/folder_open:"),
+    ("equipment", "비품 관리", "비품", ":material/inventory_2:"),
+    ("employees", "사원", "사원", ":material/group:"),
+    ("data", "데이터·계정", "설정", ":material/settings:"),
+)
+ADMIN_ONLY_PAGES = frozenset(p for p, *_ in ADMIN_NAV) - frozenset(p for p, *_ in EMPLOYEE_NAV)
+PAGE_DENIED_NOTICE = "관리자만 사용할 수 있는 메뉴입니다. 홈으로 이동했습니다."
+
+
+def _nav_for(auth: dict) -> tuple:
+    return ADMIN_NAV if auth.get("role") == "admin" else EMPLOYEE_NAV
+
+
+def _resolve_page(auth: dict) -> tuple[str, str | None]:
+    """URL의 page 값을 역할별 허용 목록과 대조한다. (보여 줄 page, 차단한 관리자 page)."""
+    allowed = {page for page, *_ in _nav_for(auth)}
+    requested = str(st.query_params.get("page") or "home")[:40]
+    page = requested if requested in allowed else "home"
+    denied = requested if requested != page and requested in ADMIN_ONLY_PAGES else None
+    if st.query_params.get("page") != page:
+        st.query_params["page"] = page
+    return page, denied
+
+
+def _go_page(page: str) -> None:
+    _touch_activity()
+    st.query_params["page"] = page
+
+
+def _brand_html(*, admin: bool = False) -> str:
+    brand = (
         "<div class='auth-brand'>"
         "<span class='header-logo'><svg viewBox='0 0 32 32' fill='none' aria-hidden='true'>"
         "<path d='M8.3 8.2h15.4a2.5 2.5 0 0 1 2.5 2.5v8.1a2.5 2.5 0 0 1-2.5 2.5h-7.2l-5.2 3.5v-3.5h-3a2.5 2.5 0 0 1-2.5-2.5v-8.1a2.5 2.5 0 0 1 2.5-2.5Z' stroke='white' stroke-width='1.8' stroke-linejoin='round'/>"
         "<path d='M11 13h10M11 16.5h7' stroke='white' stroke-width='1.7' stroke-linecap='round'/>"
         "</svg></span><strong>오피스 지니</strong></div>"
     )
+    return f"<div class='manager-brand'>{brand}<span>관리자</span></div>" if admin else brand
 
 
-def _render_site_header(*, logout: bool = False, admin_dashboard: bool = False) -> None:
+def _render_site_header(*, logout: bool = False, auth: dict | None = None, page: str | None = None) -> None:
     with st.container(
         key="site_header", horizontal=True, wrap=False, horizontal_alignment="distribute",
         vertical_alignment="center",
     ):
-        brand = _brand_html()
-        if admin_dashboard:
-            brand = f"<div class='manager-brand'>{brand}<span>관리자</span></div>"
-        st.markdown(brand, unsafe_allow_html=True, width="content")
-        if admin_dashboard:
+        is_admin = bool(auth and auth.get("role") == "admin")
+        st.markdown(_brand_html(admin=is_admin), unsafe_allow_html=True, width="content")
+        if auth and page is not None:
             with st.container(
-                key="manager_header_actions", horizontal=True, wrap=False, width="content",
+                key="top_nav", horizontal=True, wrap=False, width="content", gap=None,
                 vertical_alignment="center",
             ):
-                if st.button("회사 설정", key="open_manager_settings"):
-                    st.session_state.manager_settings = True
-                    st.rerun()
-                if st.button("← 뒤로가기", key="leave_admin_dashboard"):
-                    st.session_state.admin_view = "home"
-                    st.rerun()
-        elif logout:
-            with st.container(horizontal=True, width="content", vertical_alignment="center"):
+                for key, label, _, _ in _nav_for(auth):
+                    st.button(
+                        label, key=f"nav_{key}", type="primary" if key == page else "tertiary",
+                        on_click=_go_page, args=(key,),
+                    )
+        if auth or logout:
+            with st.container(
+                key="header_user", horizontal=True, wrap=False, width="content",
+                vertical_alignment="center", gap="small",
+            ):
+                if auth:
+                    who = (auth.get("company_name") or "") if is_admin else f"{auth.get('name') or ''}님"
+                    st.markdown(
+                        f"<span class='header-user'>{_escape(who)}</span>",
+                        unsafe_allow_html=True, width="content",
+                    )
                 st.button("로그아웃", key="logout_button", on_click=_on_logout_click)
+
+
+def _render_bottom_tabs(auth: dict, page: str) -> None:
+    """모바일(768px 미만) 하단 고정 탭바. PC에서는 CSS로 숨긴다."""
+    with st.container(key="bottom_tabs", horizontal=True, wrap=False, gap=None):
+        for key, label, short, icon in _nav_for(auth):
+            st.button(
+                short, key=f"tab_{key}", icon=icon,
+                type="primary" if key == page else "tertiary",
+                on_click=_go_page, args=(key,), width="stretch",
+            )
+
+
+def _page_heading(title: str, subtitle: str = "") -> None:
+    sub = f"<p>{_escape(subtitle)}</p>" if subtitle else ""
+    st.markdown(
+        f"<div class='page-heading'><h1>{_escape(title)}</h1>{sub}</div>",
+        unsafe_allow_html=True,
+    )
+    notice = st.session_state.pop("manager_success", "")
+    if notice:
+        st.success(notice)
+
+
+def _render_app(agent: OfficeGenieAgent, auth: dict, page: str) -> None:
+    is_admin = auth.get("role") == "admin"
+    pages = ADMIN_PAGES if is_admin else EMPLOYEE_PAGES
+    if not is_admin:
+        dashboard_identity = (auth["company_id"], auth["employee_id"])
+        if st.session_state.get("dashboard_identity") != dashboard_identity:
+            st.session_state.dashboard_identity = dashboard_identity
+            _new_chat_state(auth["company_id"], auth["employee_id"], False)
+    with st.container(key="dashboard_root", gap=None):
+        _render_site_header(auth=auth, page=page)
+        with st.container(key="page_main", gap=None):
+            notice = st.session_state.pop("page_notice", "")
+            if notice:
+                st.warning(notice)
+            pages[page](agent, auth)
+        _render_bottom_tabs(auth, page)
+    if not is_admin:
+        _render_chat_launcher(auth)
+
+
+def _render_chat_launcher(auth: dict) -> None:
+    company_id, employee_id = auth["company_id"], auth["employee_id"]
+    with st.container(key="chat_fab"):
+        st.button(
+            "챗봇 닫기" if st.session_state.get("chat_panel_open") else "챗봇 열기",
+            key="chat_fab_toggle",
+            on_click=_toggle_chat_panel,
+            args=(company_id, employee_id),
+        )
+    if st.session_state.get("chat_panel_open"):
+        _render_chat_panel(company_id, employee_id)
 
 
 def _render_landing() -> None:
@@ -2170,7 +2863,11 @@ def _render_login() -> None:
             result = {"ok": False, "message": CONNECTION_ERROR}
         if result.get("ok"):
             try:
-                state.login_success = (_auth_from_login(result["data"]), time.monotonic())
+                state.login_success = (
+                    _auth_from_login(result["data"]),
+                    result["data"].get("session_token") or "",
+                    time.monotonic(),
+                )
             except (KeyError, TypeError) as exc:
                 _log_post_login_failure("login_response", exc, None)
                 state.login_error = POST_LOGIN_ERROR
@@ -2180,13 +2877,18 @@ def _render_login() -> None:
         state.login_clear_password = True
         st.rerun()
     if success is not None:
-        auth, confirmed_at = success
+        auth, token, confirmed_at = success
         time.sleep(max(0, 0.8 - (time.monotonic() - confirmed_at)))
         for key in list(state.keys()):
             del state[key]
         state.auth = auth
-        if auth["role"] == "admin":
-            state.admin_view = "home"
+        state.resume_checked = True
+        if st.query_params.get("view") == "login":
+            del st.query_params["view"]
+        if token:
+            state.session_token = token
+            state.session_checked_at = time.monotonic()
+            state.cookie_action = ("set", token)
         _touch_activity()
         st.rerun()
 
@@ -2232,54 +2934,13 @@ def _render_change_password_card(auth: dict, minimum: int) -> None:
                 return
             auth["must_change"] = False
             st.session_state.auth = auth
+            # 비밀번호를 바꾸면 기존 세션이 모두 폐기되므로 새 토큰으로 쿠키를 바꾼다.
+            token = (result.get("data") or {}).get("session_token")
+            if token:
+                st.session_state.session_token = token
+                st.session_state.session_checked_at = time.monotonic()
+                st.session_state.cookie_action = ("set", token)
             st.rerun()
-
-
-def _render_employee(agent: OfficeGenieAgent, auth: dict) -> None:
-    company_id = auth["company_id"]
-    employee_id = auth["employee_id"]
-
-    dashboard_identity = (company_id, employee_id)
-    if st.session_state.get("dashboard_identity") != dashboard_identity:
-        st.session_state.dashboard_identity = dashboard_identity
-        _new_chat_state(company_id, employee_id, False)
-
-    fallback_employee = {
-        "employee_id": employee_id,
-        "name": auth.get("name"),
-        "department": auth.get("department"),
-        "position": auth.get("position"),
-    }
-    with st.container(key="dashboard_root", gap=None):
-        _render_site_header(logout=True)
-        with st.container(key="employee_read_status", gap=None):
-            with st.spinner("온보딩 정보를 불러오는 중입니다."):
-                sidebar_result = agent.get_sidebar(company_id, employee_id)
-            if sidebar_result.get("code") == "INVALID_SESSION":
-                _logout(sidebar_result.get("message", ""))
-                st.rerun()
-            if not sidebar_result.get("ok"):
-                _read_error(sidebar_result.get("message"), "employee_sidebar")
-
-        sidebar_ok = sidebar_result.get("ok")
-        sidebar_data = (sidebar_result.get("data") or {}) if sidebar_ok else {}
-        dashboard_employee = sidebar_data.get("employee", fallback_employee)
-        tickets = sidebar_data.get("tickets", []) if sidebar_ok else None
-        announcements = sidebar_data.get("announcements")
-        annual_leave = sidebar_data.get("annual_leave")
-        remaining_leave = annual_leave.get("remaining_days") if isinstance(annual_leave, dict) else None
-        _render_dashboard(dashboard_employee, tickets, remaining_leave, announcements)
-
-    with st.container(key="chat_fab"):
-        st.button(
-            "챗봇 닫기" if st.session_state.get("chat_panel_open") else "챗봇 열기",
-            key="chat_fab_toggle",
-            on_click=_toggle_chat_panel,
-            args=(company_id, employee_id),
-        )
-
-    if st.session_state.get("chat_panel_open"):
-        _render_chat_panel(company_id, employee_id)
 
 
 # ---------------------------------------------------------------------------
@@ -2307,36 +2968,6 @@ def _admin_read(agent: OfficeGenieAgent, auth: dict, name: str, **args) -> dict 
         return result["data"]
     _read_error(result.get("message"), name)
     return None
-
-
-def _open_admin_dashboard() -> None:
-    auth = st.session_state.get("auth") or {}
-    if auth.get("role") == "admin" and not auth.get("must_change"):
-        st.session_state.admin_view = "dashboard"
-        st.session_state.manager_tabs = "사원 관리"
-
-
-def _render_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
-    profile = {"name": "관리자", "department": auth["company_name"], "position": auth["account_id"]}
-    with st.container(key="dashboard_root", gap=None):
-        _render_site_header(logout=True)
-        with st.container(key="admin_home_main", gap=None):
-            st.markdown(
-                _onboarding_welcome("관리자", "회사 소식을 확인하고 관리자 화면에서 업무를 관리하세요."),
-                unsafe_allow_html=True,
-            )
-            with st.container(key="admin_home_profile", gap=None):
-                st.markdown(_onboarding_profile(profile, None), unsafe_allow_html=True)
-                with st.container(key="admin_home_action", width="content"):
-                    st.button("관리자 화면 →", key="open_admin_dashboard", on_click=_open_admin_dashboard)
-            data = _admin_read(agent, auth, "ui_admin_list_announcements")
-            announcements = [notice for notice in data["announcements"] if notice["is_public"]] if data else None
-            st.markdown(
-                _onboarding_cards(None, announcements, equipment_unavailable="연결된 사원 정보가 없습니다."),
-                unsafe_allow_html=True,
-            )
-    with st.container(key="chat_fab"):
-        st.button("챗봇 열기", key="admin_home_chat", disabled=True)
 
 
 def _short_time(value: object) -> str:
@@ -2892,39 +3523,12 @@ def _admin_accounts_tab(agent: OfficeGenieAgent, auth: dict) -> None:
         else:
             changed = agent.change_password(auth["company_id"], auth["account_id"], old, new)
             (st.success if changed.get("ok") else st.error)(changed.get("message", ""))
-
-
-def _render_admin_settings(agent: OfficeGenieAgent, auth: dict) -> None:
-    with st.container(key="admin_root"):
-        with st.container(key="settings_heading", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-            st.markdown("<h1>회사 설정</h1>", unsafe_allow_html=True, width="content")
-            if st.button("← 관리자 대시보드", key="leave_manager_settings"):
-                st.session_state.manager_settings = False
-                st.rerun()
-        company_info = st.container(gap=None)
-        data_tab, employees_tab, tickets_tab, accounts_tab = st.tabs(
-            ["자료 업로드", "사원 상세", "신청 이력 관리", "계정"], key="settings_tabs",
-        )
-        with company_info:
-            info = _admin_read(agent, auth, "ui_admin_overview")
-            if info is None:
-                return
-            with st.container(key="settings_code_card", gap=None):
-                st.markdown(
-                    "<div class='company-code-label'><strong>회사 코드</strong>사원들에게 알려주세요</div>"
-                    f"<div class='company-code-big'>{_escape(info['company_code'])}</div>",
-                    unsafe_allow_html=True,
-                )
-                _company_code_copy(data={"code": info["company_code"]}, key="settings_company_code")
-        with data_tab:
-            with st.container(key="settings_data"):
-                _admin_data_tab(agent, auth, info)
-        with employees_tab:
-            _admin_employees_tab(agent, auth)
-        with tickets_tab:
-            _admin_tickets_tab(agent, auth)
-        with accounts_tab:
-            _admin_accounts_tab(agent, auth)
+            token = (changed.get("data") or {}).get("session_token") if changed.get("ok") else None
+            if token:
+                st.session_state.session_token = token
+                st.session_state.session_checked_at = time.monotonic()
+                st.session_state.cookie_action = ("set", token)
+                _apply_cookie_action()
 
 
 def _manager_select(section: str, mode: str | None, row_id: str | None = None) -> None:
@@ -3286,38 +3890,120 @@ def _manager_announcement_form(agent: OfficeGenieAgent, auth: dict, notice: dict
         _manager_result(result, "notices", "공지사항이 저장되었습니다.")
 
 
+def _notice_matches(notice: dict, query: str) -> bool:
+    return not query or query in _manager_term(notice.get("title")) or query in _manager_term(notice.get("body"))
+
+
+def _notice_details_html(notices: list[dict]) -> str:
+    return "".join(
+        "<details class='notice-entry notice-page-entry'><summary class='notice-row'>"
+        f"<span class='notice-title'>{_escape(n.get('title'))}"
+        + ("<em class='new-badge'>NEW</em>" if _is_new(n.get("published_at") or n.get("created_at")) else "")
+        + f"</span><time class='notice-date'>{_date_label(n.get('published_at') or n.get('created_at'))}</time>"
+        "</summary>"
+        f"<div class='notice-body'>{_escaped_lines(n.get('body'))}</div></details>"
+        for n in notices
+    )
+
+
+def _page_employee_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("공지사항", "회사 소식을 확인하세요. 제목을 누르면 내용이 펼쳐집니다.")
+    result = agent.employee_call("ui_list_notices", auth["company_id"], auth["employee_id"])
+    if result.get("code") == "INVALID_SESSION":
+        _logout(result.get("message", ""))
+        st.rerun()
+    if not result.get("ok"):
+        _read_error(result.get("message"), "employee_notices")
+        return
+    notices = result["data"]["announcements"]
+    with st.container(key="notice_board", gap=None):
+        query = _manager_term(
+            st.text_input(
+                "공지 검색", key="notice_query", placeholder="제목이나 내용으로 검색",
+                label_visibility="collapsed", icon=":material/search:",
+            )
+        )
+        matches = [n for n in notices if _notice_matches(n, query)]
+        if not notices:
+            body = "<div class='empty-state'><strong>등록된 공지사항이 없습니다.</strong><span>새 공지가 올라오면 여기에 표시됩니다.</span></div>"
+        elif not matches:
+            body = "<div class='empty-state'><strong>검색 결과가 없습니다.</strong><span>다른 단어로 검색해 보세요.</span></div>"
+        else:
+            body = f"<p class='list-count'>총 {len(matches)}건</p><div class='notice-list'>{_notice_details_html(matches)}</div>"
+        st.markdown(body, unsafe_allow_html=True)
+
+
+def _toggle_notice_public(agent: OfficeGenieAgent, auth: dict, notice: dict) -> None:
+    result = _admin(
+        agent, auth, "ui_admin_save_announcement", title=notice["title"], body=notice["body"],
+        is_public=not notice["is_public"], announcement_id=notice["announcement_id"],
+    )
+    if result.get("ok"):
+        st.session_state.manager_success = "공개 상태를 변경했습니다."
+    else:
+        st.session_state.manager_error = result.get("message") or CONNECTION_ERROR
+
+
 def _manager_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    """공지사항 관리: 목록에서 바로 수정·공개 전환, 위에서 새 공지 작성."""
     result = _admin_read(agent, auth, "ui_admin_list_announcements")
     if result is None:
         return
     notices = result["announcements"]
     mode, notice_id = st.session_state.get("manager_notices_selection", (None, None))
-    if mode == "add":
-        _manager_announcement_form(agent, auth, None)
-        return
-    if mode == "edit":
-        notice = next((n for n in notices if n["announcement_id"] == notice_id), None)
-        if notice:
-            _manager_announcement_form(agent, auth, notice)
-        else:
-            st.info("해당 공지를 찾을 수 없습니다.")
-            st.button("공지사항 목록", on_click=_manager_select, args=("notices", None))
-        return
-    with st.container(horizontal=True, horizontal_alignment="distribute"):
-        _manager_heading("공지사항 목록", "사원에게 전달할 소식을 작성하고 공개 여부를 관리하세요.", f"총 {len(notices)}건")
+    error = st.session_state.pop("manager_error", "")
+    if error:
+        st.error(error)
+    with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+        _manager_heading("공지사항 목록", "제목을 눌러 수정하거나 공개 상태를 바로 바꿀 수 있습니다.", f"총 {len(notices)}건")
         st.button("＋ 공지 작성", type="primary", on_click=_manager_select, args=("notices", "add"))
+    if mode == "add":
+        with st.container(key="notice_inline_form"):
+            _manager_announcement_form(agent, auth, None)
     if not notices:
-        st.info("등록된 공지사항이 없습니다.")
+        st.markdown(
+            "<div class='empty-state'><strong>등록된 공지사항이 없습니다.</strong>"
+            "<span>‘＋ 공지 작성’으로 첫 공지를 올려 보세요.</span></div>",
+            unsafe_allow_html=True,
+        )
         return
-    query, _ = _manager_filter("notices", "제목 검색")
+    query, visibility = _manager_filter("notices", "제목 검색", ["공개", "비공개"], "전체 공개 상태")
     rows = [
-        (n["announcement_id"], (
-            n["title"], str(n["published_at"] or "—")[:10].replace("-", "."),
-            ("공개", "green") if n["is_public"] else ("비공개", "gray"),
-        ))
-        for n in notices if query in _manager_term(n["title"])
+        n for n in notices
+        if query in _manager_term(n["title"])
+        and (visibility is None or (visibility == "공개") == bool(n["is_public"]))
     ]
-    _manager_table("notices", ("제목", "게시일", "공개 상태"), (4, 1.5, 1.45, 1), rows, "수정", "edit")
+    if not rows:
+        st.info("표시할 검색 결과가 없습니다.")
+        return
+    with st.container(key="notice_admin_list", gap=None):
+        for notice in rows:
+            nid = notice["announcement_id"]
+            with st.container(key=f"notice_admin_row_{nid}", horizontal=True, vertical_alignment="center", gap="small"):
+                badge = ("공개", "green") if notice["is_public"] else ("비공개", "gray")
+                st.markdown(
+                    f"<div class='notice-admin-title'><strong>{_escape(notice['title'])}</strong>"
+                    f"<span>{_date_label(notice['published_at'] or notice['created_at'])}</span></div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(_manager_badge(*badge), unsafe_allow_html=True, width="content")
+                st.button(
+                    "비공개로" if notice["is_public"] else "공개하기", key=f"notice_toggle_{nid}",
+                    on_click=_toggle_notice_public, args=(agent, auth, notice),
+                )
+                st.button(
+                    "수정", key=f"manager_notices_row_{nid}", type="primary" if (mode, notice_id) == ("edit", nid) else "secondary",
+                    on_click=_manager_select, args=("notices", "edit", nid),
+                )
+            if (mode, notice_id) == ("edit", nid):
+                with st.container(key="notice_inline_form"):
+                    _manager_announcement_form(agent, auth, notice)
+
+
+def _page_admin_notices(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("공지사항 관리", "사원에게 전달할 소식을 작성하고 공개 여부를 관리하세요.")
+    with st.container(key="manager_card"):
+        _manager_notices(agent, auth)
 
 
 def _manager_policies(agent: OfficeGenieAgent, auth: dict) -> None:
@@ -3369,34 +4055,922 @@ def _manager_policies(agent: OfficeGenieAgent, auth: dict) -> None:
     )
 
 
-def _render_admin(agent: OfficeGenieAgent, auth: dict) -> None:
-    with st.container(key="manager_dashboard", gap=None):
-        _render_site_header(admin_dashboard=True)
-        with st.container(key="manager_main"):
-            notice = st.session_state.pop("manager_success", "")
-            with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-                st.markdown(
-                    "<div class='manager-heading'><h1>관리자 대시보드</h1></div>"
-                    "<p class='manager-subtitle'>우리 회사의 구성원과 사내 정보를 한곳에서 관리하세요.</p>",
-                    unsafe_allow_html=True, width="content",
+# ---------------------------------------------------------------------------
+# 사원 메뉴
+# ---------------------------------------------------------------------------
+
+
+def _employee_sidebar(agent: OfficeGenieAgent, auth: dict) -> dict | None:
+    """본인 연차·신청·공지. 세션이 무효하면 로그아웃한다. 실패하면 None."""
+    with st.container(key="employee_read_status", gap=None):
+        with st.spinner("정보를 불러오는 중입니다."):
+            result = agent.get_sidebar(auth["company_id"], auth["employee_id"])
+        if result.get("code") == "INVALID_SESSION":
+            _logout(result.get("message", ""))
+            st.rerun()
+        if not result.get("ok"):
+            _read_error(result.get("message"), "employee_sidebar")
+            return None
+    return result.get("data") or {}
+
+
+# ---------------------------------------------------------------------------
+# 비품 신청: 품목 선택 → 남은 수량 안내 → 수량·목적 → 요약 확인 → 접수 확정 (검증은 서버)
+# ---------------------------------------------------------------------------
+
+EQUIPMENT_PURPOSE_MAX = 200
+
+
+def _equipment_reset_form() -> None:
+    for key in ("eq_item", "eq_quantity", "eq_purpose", "eq_preview", "eq_error"):
+        st.session_state.pop(key, None)
+
+
+def _equipment_preview(agent: OfficeGenieAgent, auth: dict) -> None:
+    _touch_activity()
+    state = st.session_state
+    state.pop("eq_error", None)
+    state.pop("eq_created", None)
+    item = state.get("eq_item")
+    if not item:
+        state.eq_error = "신청할 품목을 선택해 주세요."
+        return
+    result = agent.employee_call(
+        "ui_preview_ticket", auth["company_id"], auth["employee_id"],
+        item=item, quantity=int(state.get("eq_quantity") or 1),
+        purpose=str(state.get("eq_purpose") or "")[:EQUIPMENT_PURPOSE_MAX],
+    )
+    if result.get("code") == "NEEDS_CONFIRMATION":
+        state.eq_preview = result["data"]["preview"]
+    else:
+        state.eq_preview = None
+        state.eq_error = result.get("message") or CONNECTION_ERROR
+
+
+def _equipment_confirm(agent: OfficeGenieAgent, auth: dict) -> None:
+    _touch_activity()
+    state = st.session_state
+    preview = state.get("eq_preview")
+    if not preview:
+        return
+    result = agent.employee_call(
+        "ui_confirm_ticket", auth["company_id"], auth["employee_id"],
+        item=preview["item"], quantity=int(preview["quantity"]), purpose=preview["purpose"],
+    )
+    if result.get("ok"):
+        _equipment_reset_form()
+        state.eq_created = result.get("message") or "신청이 접수되었습니다."
+    else:
+        state.eq_preview = None
+        state.eq_error = result.get("message") or CONNECTION_ERROR
+
+
+def _equipment_edit() -> None:
+    st.session_state.pop("eq_preview", None)
+
+
+def _quantity_note(option: dict) -> str:
+    if option["remaining"] is None:
+        return "이 품목은 1인 수량 한도가 정해져 있지 않습니다. 필요한 만큼 신청하면 검토 후 지급됩니다."
+    if option["remaining"] == 0:
+        return (
+            f"1인 한도 {option['limit']}개를 이미 받았거나 신청 중입니다"
+            f"(보유·처리 중 {option['held_or_pending']}개). 지금은 더 신청할 수 없습니다."
+        )
+    return (
+        f"남은 신청 가능 수량 {option['remaining']}개 "
+        f"(1인 한도 {option['limit']}개 · 보유·처리 중 {option['held_or_pending']}개)"
+    )
+
+
+def _render_equipment_form(agent: OfficeGenieAgent, auth: dict, options: list[dict]) -> None:
+    state = st.session_state
+    with st.container(key="equipment_form", gap=None):
+        st.markdown("<div class='widget-head'><h3>새 비품 신청</h3></div>", unsafe_allow_html=True)
+        created = state.pop("eq_created", "")
+        if created:
+            st.success(created)
+        if not options:
+            st.markdown(_empty_html("신청할 수 있는 비품이 아직 등록되지 않았습니다.", "관리자에게 문의해 주세요."), unsafe_allow_html=True)
+            return
+        preview = state.get("eq_preview")
+        by_name = {o["item"]: o for o in options}
+        if state.get("eq_item") not in by_name:
+            state.pop("eq_item", None)
+        st.pills(
+            "1. 품목 선택", list(by_name), key="eq_item", disabled=bool(preview),
+            format_func=lambda name: name if by_name[name]["remaining"] != 0 else f"{name} (한도 도달)",
+        )
+        option = by_name.get(state.get("eq_item"))
+        if option is None:
+            st.caption("허용된 품목만 신청할 수 있습니다.")
+        else:
+            blocked = option["remaining"] == 0
+            (st.warning if blocked else st.info)(_quantity_note(option))
+            maximum = option["remaining"] if option["remaining"] is not None else 20
+            if not blocked:
+                if int(state.get("eq_quantity") or 1) > maximum:
+                    state.eq_quantity = maximum
+                cols = st.columns([1, 2], gap="medium")
+                cols[0].number_input("2. 수량", min_value=1, max_value=max(1, maximum), step=1, key="eq_quantity", disabled=bool(preview))
+                cols[1].text_input(
+                    "3. 사용 목적 (선택)", key="eq_purpose", max_chars=EQUIPMENT_PURPOSE_MAX,
+                    placeholder="예: 개발 업무용 듀얼 모니터 구성", disabled=bool(preview),
                 )
-                if notice:
-                    st.success(notice)
-            labels = ["사원 관리", "비품 관리", "공지사항 관리", "데이터 관리"]
-            sections = [
-                ("employees", _manager_employees), ("equipment", _manager_equipment),
-                ("notices", _manager_notices), ("policies", _manager_policies),
-            ]
-            tabs = st.tabs(labels, key="manager_tabs", on_change="rerun")
-            for tab, (section, render) in zip(tabs, sections):
-                if tab.open:
-                    with tab:
-                        with st.container(key="manager_card"):
-                            selection = st.session_state.get(f"manager_{section}_selection", (None, None))
-                            with _view_container(selection, f"_manager_{section}_slot"):
-                                if section == "policies" and not selection[0]:
-                                    _manager_heading("사내 규정", "챗봇이 답변에 참고하는 사내 규정 원문을 확인할 수 있습니다.")
-                                render(agent, auth)
+        error = state.pop("eq_error", "")
+        if error:
+            st.error(error)
+        if preview:
+            with st.container(key="equipment_confirm_card", gap=None):
+                warnings = "".join(f"<div class='ticket-warning'>{_escape(w)}</div>" for w in preview.get("warnings") or [])
+                reference = (
+                    f"<span>근거 규정</span><strong>{_escape(preview['policy_reference'])}</strong>"
+                    if preview.get("policy_reference") else ""
+                )
+                st.markdown(
+                    "<div class='ticket-check-title'>4. 신청 내용을 확인해 주세요.</div>"
+                    "<div class='ticket-check-details'>"
+                    f"<span>품목</span><strong>{_escape(preview['item'])}</strong>"
+                    f"<span>수량</span><strong>{_escape(preview['quantity'])}개</strong>"
+                    f"<span>사용 목적</span><strong>{_escape(preview['purpose'])}</strong>{reference}</div>{warnings}"
+                    "<p class='widget-note'>접수를 확정하면 신청 번호가 발급되고 관리자에게 전달됩니다.</p>",
+                    unsafe_allow_html=True,
+                )
+                with st.container(horizontal=True, gap="small"):
+                    st.button("접수 확정", key="eq_confirm", type="primary", on_click=_equipment_confirm, args=(agent, auth), width="stretch")
+                    st.button("수정하기", key="eq_edit", on_click=_equipment_edit, width="stretch")
+        elif option is not None and option["remaining"] != 0:
+            st.button("신청 내용 확인", key="eq_check", type="primary", on_click=_equipment_preview, args=(agent, auth), width="stretch")
+
+
+def _ticket_timeline_html(ticket: dict) -> str:
+    steps = [("접수완료", ticket["created_at"], "신청 접수")]
+    steps += [(h.get("to"), h.get("at"), h.get("note") or "") for h in ticket.get("history") or []]
+    items = "".join(
+        f"<li class='timeline-step status-{_equipment_status(str(status))[1]}'><i></i><div>"
+        f"<strong>{_escape(_equipment_status(str(status))[0])}</strong>"
+        f"<time>{_escape(_short_time(at))}</time>"
+        + (f"<p>{_escape(note)}</p>" if note else "")
+        + "</div></li>"
+        for status, at, note in steps
+    )
+    return f"<ol class='ticket-timeline'>{items}</ol>"
+
+
+def _my_ticket_html(ticket: dict) -> str:
+    label, tone = _equipment_status(str(ticket["status"]))
+    scheduled = ticket.get("scheduled_date")
+    extra = (
+        f"지급 예정일 {_escape(scheduled)}"
+        if scheduled and ticket["status"] != "지급완료"
+        else f"최근 변경 {_escape(_short_time(ticket.get('updated_at')))}"
+    )
+    purpose = f"<p class='resource-desc'>{_escape(ticket['purpose'])}</p>" if ticket.get("purpose") else ""
+    return (
+        "<details class='my-ticket'><summary>"
+        f"{_equipment_icon(str(ticket['item']))}"
+        f"<span class='resource-text'><strong>{_escape(ticket['item'])} × {_escape(ticket['quantity'])}</strong>"
+        f"<span class='resource-meta'>{_escape(ticket['ticket_id'])} · {_escape(ticket['type'])} · "
+        f"신청 {_escape(_date_label(ticket['created_at']))}</span><span class='resource-meta'>{extra}</span></span>"
+        f"<span class='status-badge status-{tone}'><i></i>{_escape(label)}</span></summary>"
+        f"<div class='my-ticket-body'>{purpose}{_ticket_timeline_html(ticket)}</div></details>"
+    )
+
+
+def _page_employee_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("비품 신청", "허용된 비품을 신청하고 처리 상황을 확인하세요.")
+    options = agent.employee_call("ui_equipment_options", auth["company_id"], auth["employee_id"])
+    mine = agent.employee_call("ui_my_tickets", auth["company_id"], auth["employee_id"])
+    if "INVALID_SESSION" in (options.get("code"), mine.get("code")):
+        _logout(options.get("message") or mine.get("message", ""))
+        st.rerun()
+    with st.container(key="equipment_layout", gap=None):
+        if options.get("ok"):
+            _render_equipment_form(agent, auth, options["data"]["items"])
+        else:
+            _read_error(options.get("message"), "equipment_options")
+        with st.container(key="equipment_history", gap=None):
+            tickets = (mine.get("data") or {}).get("tickets") if mine.get("ok") else None
+            count = f"<span class='card-count'>전체 {len(tickets)}건</span>" if tickets is not None else ""
+            st.markdown(f"<div class='widget-head'><h3>내 신청 내역</h3>{count}</div>", unsafe_allow_html=True)
+            if tickets is None:
+                _read_error(mine.get("message"), "my_tickets")
+            elif not tickets:
+                st.markdown(_empty_html("아직 신청한 내역이 없습니다.", "비품을 신청하면 여기에서 처리 상황을 볼 수 있습니다."), unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    "<p class='widget-note'>항목을 누르면 처리 이력을 볼 수 있습니다.</p>"
+                    + "".join(_my_ticket_html(t) for t in tickets),
+                    unsafe_allow_html=True,
+                )
+
+
+# ---------------------------------------------------------------------------
+# 홈: 사원증 + 요약 위젯
+# ---------------------------------------------------------------------------
+
+NEW_BADGE_DAYS = 7
+STATUS_ORDER = ("접수완료", "검토중", "승인", "지급완료", "반려")
+
+
+def _parse_time(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+
+
+def _is_new(value: object) -> bool:
+    moment = _parse_time(value)
+    if moment is None:
+        return False
+    age = datetime.now(ZoneInfo("Asia/Seoul")) - moment
+    return age.total_seconds() >= -60 and age.days < NEW_BADGE_DAYS
+
+
+def _date_label(value: object) -> str:
+    moment = _parse_time(value)
+    return moment.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y.%m.%d") if moment else "—"
+
+
+def _barcode_svg(seed: str) -> str:
+    """사번으로 만든 장식용 바코드(실제 인증 수단 아님)."""
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    x, bars = 0, []
+    for byte in digest[:24]:
+        for width in (1 + (byte & 3), 1 + ((byte >> 2) & 1)):
+            bars.append(f"<rect x='{x}' y='0' width='{width}' height='36'/>")
+            x += width + 1 + ((byte >> 4) & 1)
+    return (
+        f"<svg class='id-barcode' viewBox='0 0 {x} 36' preserveAspectRatio='none' "
+        f"aria-hidden='true' fill='currentColor'>{''.join(bars)}</svg>"
+    )
+
+
+def _id_card_html(company_name: str, employee: dict) -> str:
+    name = str(employee.get("name") or "")
+    initial = name[:1] or "?"
+    meta = " · ".join(
+        _escape(part) for part in (employee.get("department"), employee.get("position")) if part
+    )
+    job = employee.get("job_title")
+    week = employee.get("onboarding_week")
+    badge = f"<span class='id-badge'>입사 {int(week)}주차</span>" if week else ""
+    return (
+        "<section class='id-card' aria-label='사원증'>"
+        f"<header class='id-card-top'><span class='id-company'>{_escape(company_name)}</span>"
+        "<span class='id-kind'>사원증</span></header>"
+        "<div class='id-card-body'>"
+        f"<div class='id-avatar' aria-hidden='true'>{_escape(initial)}</div>"
+        f"<h2 class='id-name'>{_escape(name)}</h2>"
+        f"<p class='id-meta'>{meta}</p>"
+        + (f"<p class='id-job'>{_escape(job)}</p>" if job else "")
+        + f"<div class='id-number'><span>사번</span><strong>{_escape(employee.get('employee_id'))}</strong>{badge}</div>"
+        f"<div class='id-code'>{_barcode_svg(str(employee.get('employee_id') or ''))}"
+        "<small>장식용 표시 · 출입·인증에 쓰지 않습니다</small></div>"
+        "</div></section>"
+    )
+
+
+def _widget(key: str, title: str, body: str, *, more: str | None = None, count: str = "", interactive: bool = True) -> None:
+    with st.container(key=f"home_widget_{key}", gap=None):
+        count_html = f"<span class='card-count'>{_escape(count)}</span>" if count else ""
+        st.markdown(
+            f"<div class='widget-head'><h3>{_escape(title)}</h3>{count_html}</div>{body}",
+            unsafe_allow_html=True,
+        )
+        if more and interactive:
+            st.button(
+                "더보기", key=f"home_more_{key}", type="tertiary", icon=":material/chevron_right:",
+                icon_position="right", on_click=_go_page, args=(more,),
+            )
+
+
+def _leave_widget_body(leave: dict) -> str:
+    details = []
+    for label, key in (("부여", "granted_days"), ("사용", "used_days")):
+        if leave.get(key) is not None:
+            details.append(f"{label} {_escape(leave[key])}일")
+    if leave.get("as_of"):
+        details.append(f"기준일 {_escape(leave['as_of'])}")
+    detail = f"<p class='widget-note'>{' · '.join(details)}</p>" if details else ""
+    return _remaining_leave_value(leave.get("remaining_days")) + detail
+
+
+def _ticket_widget_body(counts: dict, latest: dict | None) -> str:
+    if not latest:
+        return "<div class='dashboard-empty'>아직 신청한 비품이 없습니다.</div>"
+    chips = "".join(
+        f"<span class='status-badge status-{_equipment_status(status)[1]}'>"
+        f"{_escape(_equipment_status(status)[0])} {counts[status]}</span>"
+        for status in STATUS_ORDER
+        if counts.get(status)
+    )
+    return (
+        f"<div class='status-chips'>{chips}</div>"
+        "<p class='widget-label'>최근 신청</p>"
+        f"<div class='equipment-list compact'>{_equipment_row(latest)}</div>"
+    )
+
+
+def _notice_widget_body(notices: list[dict]) -> str:
+    if not notices:
+        return "<div class='dashboard-empty'>등록된 공지사항이 없습니다.</div>"
+    rows = "".join(
+        "<li class='notice-row'>"
+        f"<span class='notice-title'>{_escape(n.get('title'))}"
+        + (
+            "<em class='new-badge private'>비공개</em>" if n.get("is_public") is False
+            else "<em class='new-badge'>NEW</em>" if _is_new(n.get("published_at") or n.get("created_at"))
+            else ""
+        )
+        + f"</span><time class='notice-date'>{_date_label(n.get('published_at') or n.get('created_at'))}</time></li>"
+        for n in notices
+    )
+    return f"<ul class='notice-list widget-list'>{rows}</ul>"
+
+
+def _tasks_widget_body(first_week: dict) -> str:
+    tasks = first_week.get("tasks") or []
+    if not tasks:
+        return "<div class='dashboard-empty'>소속 부서의 1주 차 할 일이 아직 등록되지 않았습니다.</div>"
+    items = "".join(
+        "<li><span class='task-box' aria-hidden='true'></span>"
+        f"<span>{_escape(task)}</span></li>"
+        for task in tasks
+    )
+    title = first_week.get("title")
+    source = f"<p class='widget-note'>{_escape(title)}</p>" if title else ""
+    return f"{source}<ul class='task-list' aria-label='1주 차 할 일(읽기 전용)'>{items}</ul>"
+
+
+def _render_home_widgets(data: dict, *, interactive: bool = True) -> None:
+    with st.container(key="home_widgets", gap=None):
+        _widget("leave", "잔여 연차", _leave_widget_body(data.get("annual_leave") or {}), interactive=interactive)
+        _widget(
+            "tickets", "내 비품 신청",
+            _ticket_widget_body(data.get("ticket_counts") or {}, data.get("latest_ticket")),
+            more="equipment", count=f"전체 {data.get('tickets_total', 0)}건", interactive=interactive,
+        )
+        _widget(
+            "notices", "최근 공지", _notice_widget_body(data.get("announcements") or []),
+            more="notices", count=f"전체 {data.get('announcements_total', 0)}건", interactive=interactive,
+        )
+        _widget(
+            "tasks", "1주 차 할 일", _tasks_widget_body(data.get("first_week") or {}),
+            more="library", interactive=interactive,
+        )
+
+
+def _render_employee_home(data: dict, *, interactive: bool = True) -> None:
+    with st.container(key="home_layout", gap=None):
+        with st.container(key="home_id_column", gap=None):
+            st.markdown(_id_card_html(data.get("company_name") or "", data["employee"]), unsafe_allow_html=True)
+        _render_home_widgets(data, interactive=interactive)
+
+
+def _page_employee_home(agent: OfficeGenieAgent, auth: dict) -> None:
+    name = auth.get("name") or ""
+    _page_heading("나의 온보딩", f"{name}님, 반가워요. 회사 생활에 필요한 정보를 한눈에 확인하세요.")
+    with st.spinner("정보를 불러오는 중입니다."):
+        result = agent.employee_call("ui_get_home", auth["company_id"], auth["employee_id"])
+    if result.get("code") == "INVALID_SESSION":
+        _logout(result.get("message", ""))
+        st.rerun()
+    if not result.get("ok"):
+        _read_error(result.get("message"), "employee_home")
+        return
+    _render_employee_home(result["data"])
+    st.markdown(
+        "<p class='dashboard-help'>궁금한 점이 있나요? 오른쪽 아래 지니에게 물어보세요.</p>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---- 관리자 홈 ----------------------------------------------------------------
+
+
+def _close_preview() -> None:
+    st.session_state.pop("preview_employee_id", None)
+
+
+def _open_preview() -> None:
+    picked = st.session_state.get("preview_pick")
+    if picked:
+        st.session_state.preview_employee_id = picked
+        st.session_state.scroll_to_top = True
+
+
+def _render_admin_preview(agent: OfficeGenieAgent, auth: dict, employee_id: str) -> None:
+    result = _admin(agent, auth, "ui_admin_preview_employee", employee_id=employee_id)
+    with st.container(key="preview_banner", horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+        if result.get("ok"):
+            who = result["data"]["employee"]
+            label = f"직원 화면 미리보기 · {who['name']} ({who['employee_id']}) · 읽기 전용"
+        else:
+            label = "직원 화면 미리보기"
+        st.markdown(f"<span class='preview-label'>{_escape(label)}</span>", unsafe_allow_html=True, width="content")
+        st.button("미리보기 닫기", key="preview_close", on_click=_close_preview)
+    if st.session_state.pop("scroll_to_top", False):
+        # 미리보기를 열면 맨 위(미리보기 띠)부터 보이게 한다.
+        st.html(
+            "<script>document.querySelector('.st-key-preview_banner')?.scrollIntoView({block: 'start'});</script>",
+            unsafe_allow_javascript=True,
+        )
+    if not result.get("ok"):
+        st.error(result.get("message") or CONNECTION_ERROR)
+        return
+    st.caption("사원이 보는 홈 화면입니다. 미리보기에서는 신청·변경을 할 수 없습니다.")
+    _render_employee_home(result["data"], interactive=False)
+
+
+def _page_admin_home(agent: OfficeGenieAgent, auth: dict) -> None:
+    preview_id = st.session_state.get("preview_employee_id")
+    if preview_id:
+        _render_admin_preview(agent, auth, preview_id)
+        return
+    _page_heading("관리자 홈", "회사 현황을 확인하고 위 메뉴에서 업무를 관리하세요.")
+    data = _admin_read(agent, auth, "ui_admin_home")
+    if data is None:
+        return
+    with st.container(key="admin_home_layout", gap=None):
+        with st.container(key="admin_company_card", gap=None):
+            st.markdown(
+                f"<span class='eyebrow'>회사</span><h2 class='company-name'>{_escape(data['company_name'])}</h2>"
+                f"<p class='widget-note'>사원 {data['employee_count']}명</p>",
+                unsafe_allow_html=True,
+            )
+            _company_code_copy(data={"code": data["company_code"]}, key="home_company_code")
+        with st.container(key="home_widgets", gap=None):
+            pending = data["pending_tickets"]
+            pending_body = (
+                "<div class='equipment-list compact'>" + "".join(
+                    "<div class='equipment-row'>"
+                    f"{_equipment_icon(str(t['item']))}<div class='equipment-name'>{_escape(t['item'])}"
+                    f"<span class='equipment-quantity'>× {_escape(t['quantity'])}</span>"
+                    f"<small class='equipment-date'>{_escape(t['name'])} · {_escape(t['department'])}</small></div>"
+                    f"<span class='status-badge status-{_equipment_status(t['status'])[1]}'><i></i>"
+                    f"{_escape(_equipment_status(t['status'])[0])}</span></div>"
+                    for t in pending
+                ) + "</div>"
+                if pending else "<div class='dashboard-empty'>처리를 기다리는 신청이 없습니다.</div>"
+            )
+            _widget("pending", "처리 대기 신청", pending_body, more="equipment", count=f"{data['pending_count']}건")
+            _widget("notices", "최근 공지", _notice_widget_body(data["announcements"]), more="notices")
+            uploads = data["recent_uploads"]
+            upload_body = (
+                "<ul class='notice-list widget-list'>" + "".join(
+                    f"<li class='notice-row'><span>{_escape(', '.join(u['kinds']) or '회사 데이터')}</span>"
+                    f"<time class='notice-date'>{_date_label(u['at'])}</time></li>"
+                    for u in uploads
+                ) + "</ul>"
+                if uploads else "<div class='dashboard-empty'>아직 업로드한 회사 데이터가 없습니다.</div>"
+            )
+            _widget("uploads", "최근 업로드", upload_body, more="data")
+            with st.container(key="home_widget_preview", gap=None):
+                st.markdown(
+                    "<div class='widget-head'><h3>직원 화면 미리보기</h3></div>"
+                    "<p class='widget-note'>사원을 골라 그 사원이 보는 홈 화면을 읽기 전용으로 확인합니다.</p>",
+                    unsafe_allow_html=True,
+                )
+                people = data["employees"]
+                if not people:
+                    st.caption("등록된 사원이 없습니다.")
+                else:
+                    labels = {p["employee_id"]: f"{p['name']} · {p['department']} ({p['employee_id']})" for p in people}
+                    st.selectbox("사원 선택", list(labels), format_func=labels.get, key="preview_pick")
+                    st.button("미리보기", key="preview_open", type="primary", on_click=_open_preview)
+
+
+# ---------------------------------------------------------------------------
+# 자료실
+# ---------------------------------------------------------------------------
+
+LIBRARY_TABS = ("전체", "규정집", "부서 자료", "양식·기타")
+RESOURCE_UPLOAD_TYPES = ["pdf", "docx", "xlsx", "pptx", "hwp", "png", "jpg", "jpeg", "txt"]
+RESOURCE_MAX_MB = 5
+_RESOURCE_ICONS = {
+    "link": ":material/link:", "pdf": ":material/picture_as_pdf:", "png": ":material/image:",
+    "jpg": ":material/image:", "jpeg": ":material/image:", "xlsx": ":material/table_chart:",
+    "pptx": ":material/slideshow:", "docx": ":material/description:", "hwp": ":material/description:",
+    "txt": ":material/article:",
+}
+
+
+def _resource_ext(resource: dict) -> str:
+    name = str(resource.get("file_name") or "")
+    return name.rpartition(".")[2].lower() if "." in name else ""
+
+
+def _size_text(size: object) -> str:
+    try:
+        size = int(size or 0)
+    except (TypeError, ValueError):
+        return ""
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f}MB"
+    return f"{max(1, size // 1024)}KB"
+
+
+def _resource_matches(resource: dict, query: str) -> bool:
+    return not query or any(
+        query in _manager_term(resource.get(field)) for field in ("title", "description", "category", "file_name")
+    )
+
+
+def _download_loader(tool: str, auth: dict, resource_id: str, admin: bool = False):
+    """다운로드 버튼을 누를 때만 서버에서 파일을 받는다(서버가 권한을 다시 확인)."""
+    agent = get_agent()
+    company_id = auth["company_id"]
+    identity = auth["account_id"] if admin else auth["employee_id"]
+
+    def load() -> bytes:
+        if admin:
+            result = agent.admin_call(tool, company_id, identity, resource_id=resource_id)
+        else:
+            result = agent.employee_call(tool, company_id, identity, resource_id=resource_id)
+        data = result.get("data") or {}
+        if not result.get("ok") or data.get("kind") != "file":
+            return (result.get("message") or CONNECTION_ERROR).encode("utf-8")
+        return base64.b64decode(data["content_base64"])
+
+    return load
+
+
+def _resource_meta_html(resource: dict, *, admin: bool = False) -> str:
+    kind = "링크" if resource["kind"] == "link" else (_resource_ext(resource).upper() or "파일")
+    parts = [kind]
+    if resource["kind"] == "file" and resource.get("size_bytes"):
+        parts.append(_size_text(resource["size_bytes"]))
+    parts.append(_date_label(resource.get("updated_at")))
+    chips = f"<span class='resource-chip'>{_escape(resource.get('category'))}</span>"
+    if resource.get("visibility") == "department":
+        chips += f"<span class='resource-chip dept'>{_escape(resource.get('department'))} 전용</span>"
+    if admin and not resource.get("is_public"):
+        chips += "<span class='resource-chip muted'>비공개</span>"
+    description = (
+        f"<p class='resource-desc'>{_escape(resource.get('description'))}</p>" if resource.get("description") else ""
+    )
+    return (
+        f"<div class='resource-text'><div class='resource-title'><strong>{_escape(resource['title'])}</strong>{chips}</div>"
+        f"{description}<span class='resource-meta'>{_escape(' · '.join(parts))}</span></div>"
+    )
+
+
+def _resource_action(resource: dict, auth: dict, key: str, *, admin: bool = False) -> None:
+    if resource["kind"] == "link":
+        st.link_button("열기", resource.get("url") or "#", icon=":material/open_in_new:")
+        return
+    st.download_button(
+        "내려받기",
+        data=_download_loader(
+            "ui_admin_download_resource" if admin else "ui_download_resource",
+            auth, resource["resource_id"], admin,
+        ),
+        file_name=resource.get("file_name") or "download",
+        mime=(resource.get("mime_type") or "application/octet-stream").split(";")[0],
+        key=key,
+        icon=":material/download:",
+        on_click="ignore",
+    )
+
+
+def _render_resource_rows(resources: list[dict], auth: dict, prefix: str) -> None:
+    for resource in resources:
+        rid = resource["resource_id"]
+        with st.container(key=f"{prefix}_row_{rid}", horizontal=True, vertical_alignment="center", gap="small"):
+            st.markdown(
+                f"<span class='resource-icon'>{_escape(_resource_ext(resource) or 'URL')}</span>",
+                unsafe_allow_html=True, width="content",
+            )
+            st.markdown(_resource_meta_html(resource), unsafe_allow_html=True)
+            _resource_action(resource, auth, f"{prefix}_get_{rid}")
+
+
+def _empty_html(title: str, hint: str = "") -> str:
+    hint_html = f"<span>{_escape(hint)}</span>" if hint else ""
+    return f"<div class='empty-state'><strong>{_escape(title)}</strong>{hint_html}</div>"
+
+
+def _handover_html(handover: dict) -> str:
+    sections = "".join(
+        f"<h4>{_escape(heading)}</h4><ul>"
+        + "".join(f"<li>{_escape(item)}</li>" for item in (items if isinstance(items, list) else [items]))
+        + "</ul>"
+        for heading, items in (handover.get("summary") or {}).items()
+    )
+    notes = handover.get("notes") or []
+    notes_html = (
+        "<h4>주의사항</h4><ul>" + "".join(f"<li>{_escape(n)}</li>" for n in notes) + "</ul>" if notes else ""
+    )
+    updated = f" · 최종 수정 {_escape(handover['last_updated'])}" if handover.get("last_updated") else ""
+    return (
+        "<details class='handover-card'><summary>"
+        f"<span class='resource-icon'>DOC</span><span class='resource-text'><strong>{_escape(handover.get('title'))}</strong>"
+        f"<span class='resource-meta'>인수인계서{updated}</span></span></summary>"
+        f"<div class='handover-body'>{sections}{notes_html}</div></details>"
+    )
+
+
+def _policy_shelf_html(groups: list[dict], query: str) -> tuple[str, int]:
+    blocks, total = [], 0
+    for group in groups:
+        rows = [
+            p for p in group["policies"]
+            if not query or any(query in _manager_term(p.get(f)) for f in ("title", "article", "content"))
+        ]
+        if not rows:
+            continue
+        total += len(rows)
+        badge = "<em class='ref-badge'>참고용</em>" if group["is_reference_only"] else "<em class='own-badge'>회사 내규</em>"
+        items = "".join(
+            "<details class='notice-entry notice-page-entry'><summary class='notice-row'>"
+            f"<span class='notice-title'>{_escape(p.get('article'))} {_escape(p.get('title'))}</span></summary>"
+            f"<div class='notice-body'>{_escaped_lines(p.get('content'))}</div></details>"
+            for p in rows
+        )
+        blocks.append(
+            f"<details class='policy-group'{' open' if query else ''}><summary><strong>{_escape(group['category'])}</strong>"
+            f"{badge}<span class='card-count'>{len(rows)}개 조항</span></summary>"
+            f"<div class='notice-list'>{items}</div></details>"
+        )
+    note = (
+        "<p class='widget-note'>‘참고용’은 회사 자체 규정이 아닌 표준취업규칙 참고 조문입니다.</p>"
+        if any(g["is_reference_only"] for g in groups) else ""
+    )
+    return note + "".join(blocks), total
+
+
+def _page_employee_library(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("자료실", "회사 규정과 부서 자료, 양식을 한곳에서 찾아보세요.")
+    result = agent.employee_call("ui_list_resources", auth["company_id"], auth["employee_id"])
+    if result.get("code") == "INVALID_SESSION":
+        _logout(result.get("message", ""))
+        st.rerun()
+    if not result.get("ok"):
+        _read_error(result.get("message"), "employee_library")
+        return
+    data = result["data"]
+    with st.container(key="library_board", gap=None):
+        query = _manager_term(
+            st.text_input(
+                "자료 검색", key="library_query", placeholder="제목이나 설명으로 검색",
+                label_visibility="collapsed", icon=":material/search:",
+            )
+        )
+        resources = [r for r in data["resources"] if _resource_matches(r, query)]
+        dept_resources = [r for r in resources if r["visibility"] == "department"]
+        common = [r for r in resources if r["visibility"] != "department"]
+        handovers = [
+            h for h in data["handovers"]
+            if not query or query in _manager_term(h.get("title")) or query in _manager_term(json.dumps(h.get("summary"), ensure_ascii=False))
+        ]
+        tabs = st.tabs(list(LIBRARY_TABS), key="library_tabs", on_change="rerun")
+        for tab, name in zip(tabs, LIBRARY_TABS):
+            if not tab.open:
+                continue
+            with tab:
+                if name == "규정집":
+                    html_text, total = _policy_shelf_html(data["policies"], query)
+                    st.markdown(
+                        html_text if total else _empty_html("찾는 규정이 없습니다." if query else "등록된 규정이 없습니다."),
+                        unsafe_allow_html=True,
+                    )
+                    continue
+                if name == "부서 자료":
+                    st.markdown(
+                        f"<p class='list-count'>{_escape(data['department'])} 자료 · "
+                        f"{len(handovers) + len(dept_resources)}건</p>"
+                        + "".join(_handover_html(h) for h in handovers),
+                        unsafe_allow_html=True,
+                    )
+                    _render_resource_rows(dept_resources, auth, "lib_dept")
+                    if not handovers and not dept_resources:
+                        st.markdown(_empty_html("소속 부서 자료가 없습니다.", "부서 자료는 같은 부서 사원에게만 보입니다."), unsafe_allow_html=True)
+                    continue
+                rows = common if name == "양식·기타" else resources
+                if name == "전체":
+                    st.markdown(
+                        f"<p class='list-count'>파일·링크 {len(rows)}건 · 인수인계서 {len(handovers)}건 · "
+                        "규정은 ‘규정집’ 탭에서 볼 수 있습니다.</p>"
+                        + "".join(_handover_html(h) for h in handovers),
+                        unsafe_allow_html=True,
+                    )
+                _render_resource_rows(rows, auth, f"lib_{LIBRARY_TABS.index(name)}")
+                if not rows and (name != "전체" or not handovers):
+                    st.markdown(
+                        _empty_html("검색 결과가 없습니다." if query else "아직 등록된 자료가 없습니다.",
+                                    "다른 단어로 검색해 보세요." if query else "관리자가 자료를 올리면 여기에 표시됩니다."),
+                        unsafe_allow_html=True,
+                    )
+
+
+# ---- 자료실 관리(관리자) -------------------------------------------------------
+
+_RESOURCE_FORM_KEYS = (
+    "res_title", "res_category", "res_desc", "res_kind", "res_url", "res_visibility", "res_department", "res_public",
+)
+
+
+def _resource_form_open(resource: dict | None) -> None:
+    state = st.session_state
+    resource = resource or {}
+    state.resource_editing = resource.get("resource_id") or "new"
+    state.res_title = resource.get("title", "")
+    state.res_category = resource.get("category")
+    state.res_desc = resource.get("description") or ""
+    state.res_kind = "링크" if resource.get("kind") == "link" else "파일"
+    state.res_url = resource.get("url") or ""
+    state.res_visibility = "특정 부서" if resource.get("visibility") == "department" else "전체"
+    state.res_department = resource.get("department")
+    state.res_public = bool(resource.get("is_public", True))
+    state.res_uploader_n = state.get("res_uploader_n", 0) + 1
+    state.pop("resource_delete", None)
+
+
+def _resource_form_close() -> None:
+    st.session_state.pop("resource_editing", None)
+    for key in _RESOURCE_FORM_KEYS:
+        st.session_state.pop(key, None)
+
+
+def _resource_save(agent: OfficeGenieAgent, auth: dict) -> None:
+    state = st.session_state
+    editing = state.get("resource_editing")
+    uploaded = state.get(f"res_file_{state.get('res_uploader_n', 0)}")
+    kind = "link" if state.get("res_kind") == "링크" else "file"
+    content = ""
+    file_name = ""
+    if kind == "file" and uploaded is not None:
+        raw = uploaded.getvalue()
+        if len(raw) > RESOURCE_MAX_MB * 1024 * 1024:
+            state.resource_error = f"파일 크기는 {RESOURCE_MAX_MB}MB 이하여야 합니다. (선택한 파일: {_size_text(len(raw))})"
+            return
+        content = base64.b64encode(raw).decode("ascii")
+        file_name = uploaded.name
+    result = _admin(
+        agent, auth, "ui_admin_save_resource",
+        title=state.get("res_title", ""), category=state.get("res_category") or "",
+        description=state.get("res_desc", ""), kind=kind, url=state.get("res_url", ""),
+        file_name=file_name, content_base64=content,
+        visibility="department" if state.get("res_visibility") == "특정 부서" else "all",
+        department=state.get("res_department") or "", is_public=bool(state.get("res_public", True)),
+        resource_id=None if editing == "new" else editing,
+    )
+    if not result.get("ok"):
+        state.resource_error = result.get("message") or CONNECTION_ERROR
+        return
+    state.manager_success = result.get("message") or "자료를 저장했습니다."
+    _resource_form_close()
+
+
+def _resource_delete(agent: OfficeGenieAgent, auth: dict, resource_id: str) -> None:
+    result = _admin(agent, auth, "ui_admin_delete_resource", resource_id=resource_id)
+    st.session_state.pop("resource_delete", None)
+    if result.get("ok"):
+        st.session_state.manager_success = result.get("message") or "자료를 삭제했습니다."
+    else:
+        st.session_state.resource_error = result.get("message") or CONNECTION_ERROR
+
+
+def _render_resource_form(agent: OfficeGenieAgent, auth: dict, data: dict) -> None:
+    state = st.session_state
+    editing = state.get("resource_editing")
+    with st.container(key="resource_form"):
+        _manager_heading("자료 등록" if editing == "new" else "자료 수정", "파일을 올리거나 링크를 등록하세요.")
+        cols = st.columns(2, gap="large")
+        cols[0].text_input("제목", key="res_title", max_chars=200)
+        cols[1].selectbox("카테고리", data["categories"], key="res_category", placeholder="카테고리 선택", index=None)
+        st.text_area("설명 (선택)", key="res_desc", max_chars=1000, height=90)
+        st.radio("종류", ["파일", "링크"], key="res_kind", horizontal=True)
+        if state.get("res_kind") == "링크":
+            st.text_input("링크 주소", key="res_url", placeholder="https://")
+        else:
+            st.file_uploader(
+                f"파일 ({data['allowed_types']} · {RESOURCE_MAX_MB}MB 이하)",
+                type=RESOURCE_UPLOAD_TYPES, max_upload_size=RESOURCE_MAX_MB,
+                key=f"res_file_{state.get('res_uploader_n', 0)}",
+            )
+            if editing != "new":
+                st.caption("새 파일을 고르지 않으면 기존 파일을 그대로 둡니다.")
+        cols = st.columns(2, gap="large")
+        cols[0].radio("공개 범위", ["전체", "특정 부서"], key="res_visibility", horizontal=True)
+        if state.get("res_visibility") == "특정 부서":
+            cols[1].selectbox("부서", data["departments"], key="res_department", index=None, placeholder="부서 선택")
+        st.toggle("사원에게 공개", key="res_public")
+        error = state.pop("resource_error", "")
+        if error:
+            st.error(error)
+        with st.container(horizontal=True, horizontal_alignment="right"):
+            st.button("취소", key="resource_cancel", on_click=_resource_form_close)
+            st.button("저장", key="resource_save", type="primary", on_click=_resource_save, args=(agent, auth))
+
+
+def _page_admin_library(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("자료실 관리", "사원에게 공유할 파일과 링크를 올리고 공개 범위를 정하세요.")
+    data = _admin_read(agent, auth, "ui_admin_list_resources")
+    if data is None:
+        return
+    resources = data["resources"]
+    with st.container(key="manager_card"):
+        error = st.session_state.get("resource_error") if not st.session_state.get("resource_editing") else ""
+        if error:
+            st.session_state.pop("resource_error", None)
+            st.error(error)
+        with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+            _manager_heading("자료 목록", f"형식: {data['allowed_types']} · 파일당 {RESOURCE_MAX_MB}MB 이하", f"총 {len(resources)}건")
+            st.button("＋ 자료 등록", key="resource_new", type="primary", on_click=_resource_form_open, args=(None,))
+        if st.session_state.get("resource_editing"):
+            _render_resource_form(agent, auth, data)
+        if not resources:
+            st.markdown(_empty_html("등록된 자료가 없습니다.", "‘＋ 자료 등록’으로 양식이나 안내 자료를 올려 보세요."), unsafe_allow_html=True)
+            return
+        query = _manager_term(st.text_input("자료 검색", key="admin_library_query", placeholder="제목·설명 검색", label_visibility="collapsed", icon=":material/search:"))
+        rows = [r for r in resources if _resource_matches(r, query)]
+        if not rows:
+            st.info("표시할 검색 결과가 없습니다.")
+        for resource in rows:
+            rid = resource["resource_id"]
+            with st.container(key=f"admin_res_row_{rid}", horizontal=True, vertical_alignment="center", gap="small"):
+                st.markdown(f"<span class='resource-icon'>{_escape(_resource_ext(resource) or 'URL')}</span>", unsafe_allow_html=True, width="content")
+                st.markdown(_resource_meta_html(resource, admin=True), unsafe_allow_html=True)
+                _resource_action(resource, auth, f"admin_res_get_{rid}", admin=True)
+                st.button("수정", key=f"admin_res_edit_{rid}", on_click=_resource_form_open, args=(resource,))
+                st.button("삭제", key=f"admin_res_delete_{rid}", on_click=lambda r=rid: st.session_state.update(resource_delete=r))
+            if st.session_state.get("resource_delete") == rid:
+                with st.container(key="resource_delete_confirm", horizontal=True, vertical_alignment="center"):
+                    st.markdown(f"<span class='preview-label'>‘{_escape(resource['title'])}’을(를) 삭제할까요? 되돌릴 수 없습니다.</span>", unsafe_allow_html=True)
+                    st.button("삭제 확인", key="resource_delete_yes", type="primary", on_click=_resource_delete, args=(agent, auth, rid))
+                    st.button("취소", key="resource_delete_no", on_click=lambda: st.session_state.pop("resource_delete", None))
+
+
+# ---------------------------------------------------------------------------
+# 관리자 메뉴. 모든 호출은 agent.admin_call로 가고, 서버가 관리자 여부를 다시 확인한다.
+# ---------------------------------------------------------------------------
+
+
+def _admin_section_tabs(key: str, sections: list[tuple[str, str, object]]) -> None:
+    """관리자 메뉴 안의 하위 탭. 선택한 탭만 그린다."""
+    tabs = st.tabs([label for label, _, _ in sections], key=key, on_change="rerun")
+    for tab, (_, section, render) in zip(tabs, sections):
+        if tab.open:
+            with tab:
+                with st.container(key="manager_card"):
+                    selection = st.session_state.get(f"manager_{section}_selection", (None, None))
+                    with _view_container(selection, f"_manager_{section}_slot"):
+                        render()
+
+
+def _page_admin_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("비품 관리", "사원이 신청한 비품의 지급 상태와 처리 이력을 관리하세요.")
+    _admin_section_tabs("equipment_tabs", [
+        ("비품 지급", "equipment", lambda: _manager_equipment(agent, auth)),
+        ("신청 상태·이력", "tickets", lambda: _admin_tickets_tab(agent, auth)),
+    ])
+
+
+def _page_admin_employees(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("사원", "회사에 소속된 사원 정보를 확인하고 관리하세요.")
+    _admin_section_tabs("employees_tabs", [
+        ("사원 목록", "employees", lambda: _manager_employees(agent, auth)),
+        ("사원 상세", "employee_detail", lambda: _admin_employees_tab(agent, auth)),
+    ])
+
+
+def _page_admin_data(agent: OfficeGenieAgent, auth: dict) -> None:
+    _page_heading("데이터·계정", "회사 데이터를 올리고 규정 원문과 계정을 관리하세요.")
+    info = _admin_read(agent, auth, "ui_admin_overview")
+    if info is None:
+        return
+    with st.container(key="settings_code_card", gap=None):
+        st.markdown(
+            "<div class='company-code-label'><strong>회사 코드</strong>사원들에게 알려주세요</div>"
+            f"<div class='company-code-big'>{_escape(info['company_code'])}</div>",
+            unsafe_allow_html=True,
+        )
+        _company_code_copy(data={"code": info["company_code"]}, key="settings_company_code")
+
+    def policies() -> None:
+        if not st.session_state.get("manager_policies_selection", (None, None))[0]:
+            _manager_heading("사내 규정", "챗봇이 답변에 참고하는 사내 규정 원문을 확인할 수 있습니다.")
+        _manager_policies(agent, auth)
+
+    def upload() -> None:
+        with st.container(key="settings_data"):
+            _admin_data_tab(agent, auth, info)
+
+    _admin_section_tabs("data_tabs", [
+        ("자료 업로드", "upload", upload),
+        ("사내 규정", "policies", policies),
+        ("계정", "accounts", lambda: _admin_accounts_tab(agent, auth)),
+    ])
 
 
 def _current_view(auth: dict | None) -> str:
@@ -3405,11 +4979,7 @@ def _current_view(auth: dict | None) -> str:
         return st.session_state.get("auth_view", entry_view)
     if auth.get("must_change"):
         return "change_password"
-    if auth.get("role") != "admin":
-        return "employee"
-    if st.session_state.get("admin_view") != "dashboard":
-        return "admin_home"
-    return "settings" if st.session_state.get("manager_settings") else "admin_dashboard"
+    return "app"
 
 
 def _view_container(view: str | tuple, state_key: str = "_screen_slot"):
@@ -3429,7 +4999,7 @@ def _view_container(view: str | tuple, state_key: str = "_screen_slot"):
     return screen
 
 
-def _render_view(view: str, auth: dict | None) -> None:
+def _render_view(view: str, auth: dict | None, page: str | None = None, denied: str | None = None) -> None:
     if not auth:
         if view == "register":
             _render_register()
@@ -3450,16 +5020,15 @@ def _render_view(view: str, auth: dict | None) -> None:
 
         with st.container(key="db_screen"):
             agent = get_agent()
-            if view == "settings":
-                with st.container(key="company_settings", gap=None):
-                    _render_site_header(logout=True)
-                    _render_admin_settings(agent, auth)
-            elif view == "admin_dashboard":
-                _render_admin(agent, auth)
-            elif view == "admin_home":
-                _render_admin_home(agent, auth)
-            else:
-                _render_employee(agent, auth)
+            if not _session_still_valid(agent):
+                _logout("로그인 정보가 변경되어 다시 로그인이 필요합니다.")
+                st.rerun()
+            if denied and auth.get("role") != "admin":
+                agent.employee_call(
+                    "ui_record_page_denied", auth["company_id"], auth["employee_id"], page=denied,
+                )
+                st.session_state.page_notice = PAGE_DENIED_NOTICE
+            _render_app(agent, auth, page or "home")
     except (RerunException, StopException):
         raise
     except Exception as exc:
@@ -3468,15 +5037,38 @@ def _render_view(view: str, auth: dict | None) -> None:
         _render_post_login_error()
 
 
+EMPLOYEE_PAGES = {
+    "home": _page_employee_home,
+    "notices": _page_employee_notices,
+    "library": _page_employee_library,
+    "equipment": _page_employee_equipment,
+}
+ADMIN_PAGES = {
+    "home": _page_admin_home,
+    "notices": _page_admin_notices,
+    "library": _page_admin_library,
+    "equipment": _page_admin_equipment,
+    "employees": _page_admin_employees,
+    "data": _page_admin_data,
+}
+
+
 def main() -> None:
+    _check_pwa_setup()
     _render_styles()
+    _render_shell_styles()
+    _restore_login()
     if _session_expired():
         _logout("30분 동안 사용하지 않아 로그아웃되었습니다. 다시 로그인해 주세요.")
+    _apply_cookie_action()
 
     auth = st.session_state.get("auth")
     view = _current_view(auth)
-    with _view_container(view):
-        _render_view(view, auth)
+    page = denied = None
+    if view == "app":
+        page, denied = _resolve_page(auth)
+    with _view_container(f"app:{page}" if page else view):
+        _render_view(view, auth, page, denied)
 
 
 main()

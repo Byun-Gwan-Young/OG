@@ -1,0 +1,39 @@
+{
+  "name": "오피스지니",
+  "short_name": "오피스지니",
+  "description": "신규 입사자를 위한 사내 온보딩 도우미",
+  "lang": "ko",
+  "dir": "ltr",
+  "id": "/?source=pwa",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#3868BE",
+  "background_color": "#F5F7FA",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "공지사항",
+      "short_name": "공지",
+      "url": "/?page=notices&source=pwa",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "비품 신청",
+      "short_name": "비품",
+      "url": "/?page=equipment&source=pwa",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "자료실",
+      "short_name": "자료실",
+      "url": "/?page=library&source=pwa",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

@@ -11,17 +11,14 @@ Playwright가 없으면 건너뛴다:
 from __future__ import annotations
 
 import json
-import os
-import socket
 import subprocess
 import sys
-import time
-import urllib.request
 from pathlib import Path
 
 import pytest
 
 playwright_sync = pytest.importorskip("playwright.sync_api")
+from tests.browser_support import browser_env, launch_chromium, running_app  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE = "TCNCZD"
@@ -43,12 +40,6 @@ storage.reset_employee_passwords("bridgesoft", [{"employee_id": "EMP001", "passw
 """
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
 def _json_password(employee_id: str) -> str:
     rows = json.loads((ROOT / "data" / "bridgesoft" / "employees.json").read_text("utf-8"))
     return next(str(e["password"]) for e in rows["employees"] if e["employee_id"] == employee_id)
@@ -56,55 +47,19 @@ def _json_password(employee_id: str) -> str:
 
 @pytest.fixture(scope="module")
 def app_url(tmp_path_factory):
-    db = tmp_path_factory.mktemp("browser") / "browser.db"
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"DATABASE_URL", "LLM_API_KEY", "LLM_BASE_URL"}
-    }
-    env.update(
-        OFFICEGENIE_TESTING="1",
-        OFFICEGENIE_TEST_FAST_HASH="1",
-        OFFICEGENIE_TEST_DATABASE_URL=f"sqlite:///{db}",
-    )
-    env.pop("OFFICEGENIE_TEST_SCHEMA", None)
+    env = browser_env(tmp_path_factory.mktemp("browser") / "browser.db")
     subprocess.run(
         [sys.executable, "-c", PREPARE, str(ROOT), CODE],
         env=env, cwd=ROOT, check=True, capture_output=True,
     )
-    port = _free_port()
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", str(ROOT / "app.py"),
-         "--server.headless", "true", "--server.port", str(port),
-         "--browser.gatherUsageStats", "false"],
-        env=env, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    url = f"http://127.0.0.1:{port}"
-    try:
-        for _ in range(120):
-            try:
-                urllib.request.urlopen(f"{url}/_stcore/health", timeout=1)
-                break
-            except OSError:
-                time.sleep(0.5)
-        else:
-            pytest.fail("Streamlit이 시작되지 않았습니다.")
+    with running_app(env) as url:
         yield url
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
 
 
 @pytest.fixture(scope="module")
 def browser():
     with playwright_sync.sync_playwright() as pw:
-        try:
-            chromium = pw.chromium.launch()
-        except Exception as exc:  # 브라우저 바이너리 미설치
-            pytest.skip(f"Chromium을 띄울 수 없습니다: {type(exc).__name__}")
+        chromium = launch_chromium(pw)
         yield chromium
         chromium.close()
 
@@ -113,10 +68,10 @@ def _login(browser, url: str, code: str, account_id: str, password: str):
     page = browser.new_page()
     page.goto(url)
     page.get_by_role("button", name="로그인", exact=True).click()
-    page.get_by_label("회사 코드").fill(code)
-    page.get_by_label("사번").fill(account_id)
-    page.get_by_label("비밀번호").fill(password)
-    page.get_by_label("비밀번호").press("Enter")
+    page.get_by_role("textbox", name="회사 코드").fill(code)
+    page.get_by_role("textbox", name="사번").fill(account_id)
+    page.get_by_label("비밀번호", exact=True).fill(password)
+    page.get_by_label("비밀번호", exact=True).press("Enter")
     return page
 
 
@@ -134,7 +89,7 @@ def test_bridgesoft_employee_logs_in_from_real_browser(
     page = _login(browser, app_url, code, account_id, password or _json_password(account_id))
     try:
         page.get_by_role("heading", name="나의 온보딩", exact=True).wait_for(timeout=30_000)
-        page.get_by_role("heading", name="내 비품 내역", exact=True).wait_for()
+        page.get_by_role("heading", name="내 비품 신청", exact=True).wait_for()
         assert page.get_by_text("로그인").count() == 0 or page.get_by_text("로그아웃").count()
         assert page.get_by_text("화면을 불러오는 중 문제가 발생했습니다").count() == 0
     finally:
@@ -146,9 +101,9 @@ def test_wrong_password_from_real_browser_allows_retry(app_url, browser):
     try:
         page.get_by_role("alert").first.wait_for(timeout=30_000)
         assert page.get_by_text("나의 온보딩").count() == 0
-        assert page.get_by_label("회사 코드").input_value() == CODE
-        assert page.get_by_label("사번").input_value() == "EMP001"
-        password = page.get_by_label("비밀번호")
+        assert page.get_by_role("textbox", name="회사 코드").input_value() == CODE
+        assert page.get_by_role("textbox", name="사번").input_value() == "EMP001"
+        password = page.get_by_label("비밀번호", exact=True)
         assert password.input_value() == ""
         password.fill("0899")
         password.press("Enter")
