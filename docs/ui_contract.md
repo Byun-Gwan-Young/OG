@@ -161,6 +161,24 @@ agent.admin_call("ui_admin_delete_resource", company_id, account_id, resource_id
   파일명은 경로·제어 문자를 지우고 정리한다. 변경(등록·수정·삭제)은 모두 감사 로그에 남고, 파일 내용은 남기지 않는다.
 - app.py는 `st.download_button(data=callable)`로 버튼을 누를 때만 파일을 받는다(서버가 그때 권한을 다시 확인).
 
+### 2-2-4. 비품 신청 메뉴
+
+```python
+agent.employee_call("ui_equipment_options", company_id, employee_id)
+# → {"items": [{"item", "limit"|None, "held_or_pending", "remaining"|None, "policy_reference"}]}
+agent.employee_call("ui_preview_ticket", company_id, employee_id, item=..., quantity=1, purpose="")
+# → create_support_ticket(confirmed=False)와 같다: NEEDS_CONFIRMATION + data.preview, 또는 REJECTED. 저장하지 않는다.
+agent.employee_call("ui_confirm_ticket", company_id, employee_id, item=..., quantity=..., purpose=...)
+# → CREATED(티켓 번호) · DUPLICATE_IGNORED · REJECTED. 서버가 한도를 다시 확인한다.
+agent.employee_call("ui_my_tickets", company_id, employee_id)
+# → {"tickets": [본인 티켓 최신순 {ticket_id, type, item, quantity, purpose, status, created_at, updated_at,
+#    scheduled_date, history: [{at, from, to, note}]}]}   (처리자 아이디는 넣지 않는다)
+```
+
+- 관리자 "비품 관리"는 기존 `ui_admin_list_tickets` · `ui_admin_save_equipment` · `ui_admin_update_ticket`을 그대로 쓴다.
+- 챗봇용 LLM 툴 `get_my_tickets`(인자 없음, 세션 값 주입)가 추가되었다. LLM_TOOLS는 6개.
+  `scheduled_date`가 없으면 지급 예정일을 지어내지 않도록 시스템 프롬프트에 적었다.
+
 ### 2-3. 채팅 입력
 
 ```python

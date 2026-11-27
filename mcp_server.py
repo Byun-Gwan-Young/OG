@@ -641,6 +641,39 @@ def create_support_ticket(
     )
 
 
+@mcp.tool
+@_storage_safe
+def get_my_tickets(company_id: str, employee_id: str) -> dict:
+    """본인의 비품·계정 신청 현황을 최신순으로 조회한다.
+
+    호출 조건: "내 모니터 언제 받아?", "신청한 거 어떻게 됐어?", "내 신청 내역 보여 줘"처럼
+    본인이 이미 신청한 건의 상태를 물을 때. 인자는 없다(본인 신청만 조회된다).
+    반환: tickets = [{ticket_id, type, item, quantity, status, created_at, updated_at,
+    scheduled_date(관리자가 정한 경우만, 없으면 null), note(반려 사유 등 최근 메모)}].
+    scheduled_date가 null이면 지급 예정일이 아직 정해지지 않은 것이다. 날짜를 추측하지 않는다.
+    """
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    tickets = storage.list_my_tickets(company_id, me["employee_id"])
+    rows = [
+        {
+            "ticket_id": t["ticket_id"],
+            "type": t["type"],
+            "item": t["item"],
+            "quantity": t["quantity"],
+            "status": t["status"],
+            "created_at": t["created_at"],
+            "updated_at": t["updated_at"],
+            "scheduled_date": t.get("scheduled_date") or None,
+            "note": (t["history"][-1]["note"] if t["history"] else "") or "",
+        }
+        for t in tickets
+    ]
+    message = "" if rows else "아직 신청한 내역이 없습니다."
+    return ok(data={"tickets": rows, "count": len(rows)}, message=message)
+
+
 # ---------------------------------------------------------------------------
 # UI 전용 툴 (LLM에게는 노출하지 않음 — agent.py의 LLM_TOOLS 참고)
 # ---------------------------------------------------------------------------
@@ -1775,6 +1808,54 @@ def ui_admin_delete_resource(company_id: str, actor_account_id: str, resource_id
     if not storage.admin_delete_resource(company_id, actor_account_id, resource_id):
         return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
     return ok("DELETED", message=MSG["RESOURCE_DELETED"])
+
+
+@mcp.tool
+@_storage_safe
+def ui_equipment_options(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 비품 신청 폼: 허용 품목과 품목별 남은 신청 가능 수량(한도 - 보유·처리 중)."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    doc = load(company_id, "tickets")
+    allowed = doc.get("allowed_equipment", [])
+    items = []
+    for equipment in allowed:
+        limited = bool(equipment.get("quantity_limit_defined")) and equipment.get("max_quantity_per_employee") is not None
+        held = _held_quantity(doc.get("tickets", []), me["employee_id"], equipment, allowed)
+        limit = int(equipment["max_quantity_per_employee"]) if limited else None
+        items.append(
+            {
+                "item": equipment["item"],
+                "limit": limit,
+                "held_or_pending": held,
+                "remaining": max(0, limit - held) if limited else None,
+                "policy_reference": equipment.get("policy_reference"),
+            }
+        )
+    return ok(data={"items": items})
+
+
+@mcp.tool
+@_storage_safe
+def ui_preview_ticket(
+    company_id: str, employee_id: str, item: str, quantity: int = 1, purpose: str = ""
+) -> dict:
+    """[UI 전용] 비품 신청 폼의 '신청 내용 확인': 서버 검증(허용 품목·수량 한도)만 하고 저장하지 않는다."""
+    return create_support_ticket(
+        item=item, company_id=company_id, employee_id=employee_id,
+        quantity=quantity, purpose=purpose, request_type="비품", confirmed=False,
+    )
+
+
+@mcp.tool
+@_storage_safe
+def ui_my_tickets(company_id: str, employee_id: str) -> dict:
+    """[UI 전용] 비품 신청 메뉴의 내 신청 내역: 본인 티켓만 최신순, 상태 변경 이력 포함."""
+    me, err = resolve_session(company_id, employee_id)
+    if err:
+        return err
+    return ok(data={"tickets": storage.list_my_tickets(company_id, me["employee_id"])})
 
 
 @mcp.tool

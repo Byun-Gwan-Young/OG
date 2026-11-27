@@ -402,7 +402,7 @@ def test_login_tools_are_not_llm_tools():
     llm_tools = agent_module.LLM_TOOLS
     assert llm_tools == {
         "search_policy", "get_employee_info", "get_office_location",
-        "get_handover_doc", "create_support_ticket",
+        "get_handover_doc", "create_support_ticket", "get_my_tickets",
     }
     assert not any(name.startswith("ui_") for name in llm_tools)
     assert not hasattr(s, "ui_list_companies") and not hasattr(s, "ui_list_employees")

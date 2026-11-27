@@ -16,7 +16,7 @@ app.py(Streamlit)는 이 파일의 두 클래스만 사용한다.
 - ChatSession: 대화 기록, 선택된 회사·사번, 확인 대기 중인 티켓을 가진다.
 
 [보안]
-- LLM에게는 LLM_TOOLS 5개만, company_id·employee_id·confirmed 인자를 뺀 스키마로 보여준다.
+- LLM에게는 LLM_TOOLS 6개만, company_id·employee_id·confirmed 인자를 뺀 스키마로 보여준다.
 - 툴 호출 시 세션 값을 서버로 주입하고, 티켓은 항상 confirmed=False(미리보기)로만 부른다.
   실제 접수는 사용자가 확정 버튼을 누르거나 "네"라고 답했을 때 confirm_ticket()으로만 진행한다.
 """
@@ -167,6 +167,7 @@ LLM_TOOLS = {
     "get_office_location",
     "get_handover_doc",
     "create_support_ticket",
+    "get_my_tickets",
 }
 HIDDEN_ARGS = {"company_id", "employee_id", "confirmed"}
 
@@ -201,6 +202,9 @@ def _system_prompt(company: str, me: dict) -> str:
 - 본인 잔여 연차·부서·직급 → get_employee_info
 - 장소 위치 → get_office_location (place는 장소 이름만)
 - 인수인계서·1주 차 할 일 → get_handover_doc
+- 본인이 이미 신청한 건의 상태·진행 상황 → get_my_tickets
+  지급 예정일은 결과의 scheduled_date가 있을 때만 그 날짜로 안내한다. null이면 "아직 지급 예정일이 정해지지 않았다"고
+  말하고 날짜를 추측하거나 지어내지 않는다. 상태 이름(접수완료·검토중·승인·지급완료·반려)은 결과 그대로 쓴다.
 - 비품·계정 신청 → create_support_ticket. 결과가 NEEDS_CONFIRMATION이면 신청 요약(품목, 수량, 목적, 경고)을 보여주고
   "접수할까요? 화면의 [접수 확정] 버튼을 누르거나 '네'라고 답해 주세요."라고 안내한다. 접수 완료라고 말하지 않는다.
   REJECTED이면 message를 전달하고, 허용 품목(allowed_items)이 있으면 함께 안내한다.

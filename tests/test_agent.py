@@ -65,7 +65,7 @@ def test_hidden_args_not_shown_to_llm_and_ui_tools_hidden(make_agent):
     chat.send("내 연차")
     names = {d["name"] for d in llm.seen_decls}
     assert names == {"search_policy", "get_employee_info", "get_office_location",
-                     "get_handover_doc", "create_support_ticket"}
+                     "get_handover_doc", "create_support_ticket", "get_my_tickets"}
     for d in llm.seen_decls:
         props = d["parameters_json_schema"].get("properties", {})
         assert not {"company_id", "employee_id", "confirmed"} & set(props)

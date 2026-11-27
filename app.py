@@ -2027,6 +2027,9 @@ def _render_shell_styles() -> None:
             [class*="st-key-lib_"][class*="_row_"] > div:nth-child(2),
             [class*="st-key-admin_res_row_"] > div:nth-child(2) { flex-basis: calc(100% - 60px) !important; }
             .handover-body { padding-left: 18px; }
+            .st-key-equipment_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            .st-key-equipment_form, .st-key-equipment_history { padding: 16px; }
+            .my-ticket-body { padding-left: 4px; }
         }
 
         /* ---- 공지사항 ---- */
@@ -2110,6 +2113,50 @@ def _render_shell_styles() -> None:
             padding: 10px 14px; border-radius: var(--radius-control);
             background: var(--amber-bg); border: 1px solid #EED9AE;
         }
+
+        /* ---- 비품 신청 ---- */
+        .st-key-equipment_layout {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+            align-items: start; gap: 24px;
+        }
+        .st-key-equipment_form, .st-key-equipment_history {
+            padding: 22px; background: var(--card); border: 1px solid var(--line);
+            border-radius: var(--radius-section); box-shadow: var(--shadow-soft); gap: 14px !important;
+        }
+        .st-key-equipment_form [data-testid="stPills"] button { min-height: 44px; padding-inline: 16px; }
+        .st-key-equipment_form :is([data-testid="stNumberInput"] input, [data-testid="stTextInput"] input) { min-height: 44px; }
+        .st-key-equipment_confirm_card {
+            padding: 16px 18px; border-radius: 12px; background: var(--blue-soft);
+            border: 1px solid var(--input-line); gap: 10px !important;
+        }
+        .st-key-equipment_confirm_card button, .st-key-eq_check button { min-height: 48px; }
+        .st-key-equipment_confirm_card .ticket-check-title { color: var(--title); font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+        .st-key-equipment_confirm_card .ticket-check-details {
+            display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px;
+            color: var(--body); font-size: 14px;
+        }
+        .st-key-equipment_confirm_card .ticket-check-details strong { color: var(--title); font-weight: 600; overflow-wrap: anywhere; }
+        .st-key-equipment_confirm_card .ticket-warning { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: var(--amber-bg); color: var(--amber); font-size: 13px; }
+        details.my-ticket { border-bottom: 1px solid #E7ECF3; }
+        details.my-ticket > summary {
+            display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 6px 2px;
+            cursor: pointer; list-style: none;
+        }
+        details.my-ticket > summary::-webkit-details-marker { display: none; }
+        details.my-ticket > summary .resource-text { flex: 1 1 auto; }
+        .my-ticket-body { padding: 0 4px 14px 54px; }
+        ol.ticket-timeline { list-style: none; margin: 8px 0 0; padding: 0; position: relative; }
+        ol.ticket-timeline::before { content: ""; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+        .timeline-step { position: relative; display: flex; gap: 12px; padding: 6px 0; }
+        .timeline-step > i { position: relative; z-index: 1; flex: 0 0 12px; height: 12px; margin-top: 4px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px var(--card); }
+        .timeline-step strong { color: var(--title); font-size: 14px; font-weight: 650; margin-right: 8px; }
+        .timeline-step time { color: var(--muted); font-size: 12px; }
+        .timeline-step p { margin: 2px 0 0; color: var(--body); font-size: 13px; }
+        .timeline-step.status-paid { color: var(--green); }
+        .timeline-step.status-scheduled { color: var(--amber); }
+        .timeline-step.status-received, .timeline-step.status-review { color: #5A77A9; }
+        .timeline-step.status-rejected { color: #A34D46; }
 
         /* ---- 모바일 하단 탭바: PC에서는 숨긴다 ---- */
         .st-key-bottom_tabs { display: none !important; }
@@ -3937,11 +3984,195 @@ def _employee_sidebar(agent: OfficeGenieAgent, auth: dict) -> dict | None:
     return result.get("data") or {}
 
 
+# ---------------------------------------------------------------------------
+# 비품 신청: 품목 선택 → 남은 수량 안내 → 수량·목적 → 요약 확인 → 접수 확정 (검증은 서버)
+# ---------------------------------------------------------------------------
+
+EQUIPMENT_PURPOSE_MAX = 200
+
+
+def _equipment_reset_form() -> None:
+    for key in ("eq_item", "eq_quantity", "eq_purpose", "eq_preview", "eq_error"):
+        st.session_state.pop(key, None)
+
+
+def _equipment_preview(agent: OfficeGenieAgent, auth: dict) -> None:
+    _touch_activity()
+    state = st.session_state
+    state.pop("eq_error", None)
+    state.pop("eq_created", None)
+    item = state.get("eq_item")
+    if not item:
+        state.eq_error = "신청할 품목을 선택해 주세요."
+        return
+    result = agent.employee_call(
+        "ui_preview_ticket", auth["company_id"], auth["employee_id"],
+        item=item, quantity=int(state.get("eq_quantity") or 1),
+        purpose=str(state.get("eq_purpose") or "")[:EQUIPMENT_PURPOSE_MAX],
+    )
+    if result.get("code") == "NEEDS_CONFIRMATION":
+        state.eq_preview = result["data"]["preview"]
+    else:
+        state.eq_preview = None
+        state.eq_error = result.get("message") or CONNECTION_ERROR
+
+
+def _equipment_confirm(agent: OfficeGenieAgent, auth: dict) -> None:
+    _touch_activity()
+    state = st.session_state
+    preview = state.get("eq_preview")
+    if not preview:
+        return
+    result = agent.employee_call(
+        "ui_confirm_ticket", auth["company_id"], auth["employee_id"],
+        item=preview["item"], quantity=int(preview["quantity"]), purpose=preview["purpose"],
+    )
+    if result.get("ok"):
+        _equipment_reset_form()
+        state.eq_created = result.get("message") or "신청이 접수되었습니다."
+    else:
+        state.eq_preview = None
+        state.eq_error = result.get("message") or CONNECTION_ERROR
+
+
+def _equipment_edit() -> None:
+    st.session_state.pop("eq_preview", None)
+
+
+def _quantity_note(option: dict) -> str:
+    if option["remaining"] is None:
+        return "이 품목은 1인 수량 한도가 정해져 있지 않습니다. 필요한 만큼 신청하면 검토 후 지급됩니다."
+    if option["remaining"] == 0:
+        return (
+            f"1인 한도 {option['limit']}개를 이미 받았거나 신청 중입니다"
+            f"(보유·처리 중 {option['held_or_pending']}개). 지금은 더 신청할 수 없습니다."
+        )
+    return (
+        f"남은 신청 가능 수량 {option['remaining']}개 "
+        f"(1인 한도 {option['limit']}개 · 보유·처리 중 {option['held_or_pending']}개)"
+    )
+
+
+def _render_equipment_form(agent: OfficeGenieAgent, auth: dict, options: list[dict]) -> None:
+    state = st.session_state
+    with st.container(key="equipment_form", gap=None):
+        st.markdown("<div class='widget-head'><h3>새 비품 신청</h3></div>", unsafe_allow_html=True)
+        created = state.pop("eq_created", "")
+        if created:
+            st.success(created)
+        if not options:
+            st.markdown(_empty_html("신청할 수 있는 비품이 아직 등록되지 않았습니다.", "관리자에게 문의해 주세요."), unsafe_allow_html=True)
+            return
+        preview = state.get("eq_preview")
+        by_name = {o["item"]: o for o in options}
+        if state.get("eq_item") not in by_name:
+            state.pop("eq_item", None)
+        st.pills(
+            "1. 품목 선택", list(by_name), key="eq_item", disabled=bool(preview),
+            format_func=lambda name: name if by_name[name]["remaining"] != 0 else f"{name} (한도 도달)",
+        )
+        option = by_name.get(state.get("eq_item"))
+        if option is None:
+            st.caption("허용된 품목만 신청할 수 있습니다.")
+        else:
+            blocked = option["remaining"] == 0
+            (st.warning if blocked else st.info)(_quantity_note(option))
+            maximum = option["remaining"] if option["remaining"] is not None else 20
+            if not blocked:
+                if int(state.get("eq_quantity") or 1) > maximum:
+                    state.eq_quantity = maximum
+                cols = st.columns([1, 2], gap="medium")
+                cols[0].number_input("2. 수량", min_value=1, max_value=max(1, maximum), step=1, key="eq_quantity", disabled=bool(preview))
+                cols[1].text_input(
+                    "3. 사용 목적 (선택)", key="eq_purpose", max_chars=EQUIPMENT_PURPOSE_MAX,
+                    placeholder="예: 개발 업무용 듀얼 모니터 구성", disabled=bool(preview),
+                )
+        error = state.pop("eq_error", "")
+        if error:
+            st.error(error)
+        if preview:
+            with st.container(key="equipment_confirm_card", gap=None):
+                warnings = "".join(f"<div class='ticket-warning'>{_escape(w)}</div>" for w in preview.get("warnings") or [])
+                reference = (
+                    f"<span>근거 규정</span><strong>{_escape(preview['policy_reference'])}</strong>"
+                    if preview.get("policy_reference") else ""
+                )
+                st.markdown(
+                    "<div class='ticket-check-title'>4. 신청 내용을 확인해 주세요.</div>"
+                    "<div class='ticket-check-details'>"
+                    f"<span>품목</span><strong>{_escape(preview['item'])}</strong>"
+                    f"<span>수량</span><strong>{_escape(preview['quantity'])}개</strong>"
+                    f"<span>사용 목적</span><strong>{_escape(preview['purpose'])}</strong>{reference}</div>{warnings}"
+                    "<p class='widget-note'>접수를 확정하면 신청 번호가 발급되고 관리자에게 전달됩니다.</p>",
+                    unsafe_allow_html=True,
+                )
+                with st.container(horizontal=True, gap="small"):
+                    st.button("접수 확정", key="eq_confirm", type="primary", on_click=_equipment_confirm, args=(agent, auth), width="stretch")
+                    st.button("수정하기", key="eq_edit", on_click=_equipment_edit, width="stretch")
+        elif option is not None and option["remaining"] != 0:
+            st.button("신청 내용 확인", key="eq_check", type="primary", on_click=_equipment_preview, args=(agent, auth), width="stretch")
+
+
+def _ticket_timeline_html(ticket: dict) -> str:
+    steps = [("접수완료", ticket["created_at"], "신청 접수")]
+    steps += [(h.get("to"), h.get("at"), h.get("note") or "") for h in ticket.get("history") or []]
+    items = "".join(
+        f"<li class='timeline-step status-{_equipment_status(str(status))[1]}'><i></i><div>"
+        f"<strong>{_escape(_equipment_status(str(status))[0])}</strong>"
+        f"<time>{_escape(_short_time(at))}</time>"
+        + (f"<p>{_escape(note)}</p>" if note else "")
+        + "</div></li>"
+        for status, at, note in steps
+    )
+    return f"<ol class='ticket-timeline'>{items}</ol>"
+
+
+def _my_ticket_html(ticket: dict) -> str:
+    label, tone = _equipment_status(str(ticket["status"]))
+    scheduled = ticket.get("scheduled_date")
+    extra = (
+        f"지급 예정일 {_escape(scheduled)}"
+        if scheduled and ticket["status"] != "지급완료"
+        else f"최근 변경 {_escape(_short_time(ticket.get('updated_at')))}"
+    )
+    purpose = f"<p class='resource-desc'>{_escape(ticket['purpose'])}</p>" if ticket.get("purpose") else ""
+    return (
+        "<details class='my-ticket'><summary>"
+        f"{_equipment_icon(str(ticket['item']))}"
+        f"<span class='resource-text'><strong>{_escape(ticket['item'])} × {_escape(ticket['quantity'])}</strong>"
+        f"<span class='resource-meta'>{_escape(ticket['ticket_id'])} · {_escape(ticket['type'])} · "
+        f"신청 {_escape(_date_label(ticket['created_at']))} · {extra}</span></span>"
+        f"<span class='status-badge status-{tone}'><i></i>{_escape(label)}</span></summary>"
+        f"<div class='my-ticket-body'>{purpose}{_ticket_timeline_html(ticket)}</div></details>"
+    )
+
+
 def _page_employee_equipment(agent: OfficeGenieAgent, auth: dict) -> None:
-    _page_heading("비품 신청", "필요한 비품을 신청하고 진행 상황을 확인하세요.")
-    data = _employee_sidebar(agent, auth)
-    tickets = data.get("tickets", []) if data is not None else None
-    st.markdown(_onboarding_cards(tickets, []), unsafe_allow_html=True)
+    _page_heading("비품 신청", "허용된 비품을 신청하고 처리 상황을 확인하세요.")
+    options = agent.employee_call("ui_equipment_options", auth["company_id"], auth["employee_id"])
+    mine = agent.employee_call("ui_my_tickets", auth["company_id"], auth["employee_id"])
+    if "INVALID_SESSION" in (options.get("code"), mine.get("code")):
+        _logout(options.get("message") or mine.get("message", ""))
+        st.rerun()
+    with st.container(key="equipment_layout", gap=None):
+        if options.get("ok"):
+            _render_equipment_form(agent, auth, options["data"]["items"])
+        else:
+            _read_error(options.get("message"), "equipment_options")
+        with st.container(key="equipment_history", gap=None):
+            tickets = (mine.get("data") or {}).get("tickets") if mine.get("ok") else None
+            count = f"<span class='card-count'>전체 {len(tickets)}건</span>" if tickets is not None else ""
+            st.markdown(f"<div class='widget-head'><h3>내 신청 내역</h3>{count}</div>", unsafe_allow_html=True)
+            if tickets is None:
+                _read_error(mine.get("message"), "my_tickets")
+            elif not tickets:
+                st.markdown(_empty_html("아직 신청한 내역이 없습니다.", "왼쪽에서 필요한 비품을 신청해 보세요."), unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    "<p class='widget-note'>항목을 누르면 처리 이력을 볼 수 있습니다.</p>"
+                    + "".join(_my_ticket_html(t) for t in tickets),
+                    unsafe_allow_html=True,
+                )
 
 
 # ---------------------------------------------------------------------------
