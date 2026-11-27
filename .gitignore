@@ -7,3 +7,4 @@ tokens.json
 officegenie.db
 officegenie.db-journal
 .venv/
+/__assets__/

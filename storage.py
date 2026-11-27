@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from sqlalchemy import (
@@ -212,6 +213,18 @@ tickets = Table(
     Column("extra", JSON, nullable=False, default=dict),
     # 관리자 상태 변경 이력 [{at, by, from, to, note}]
     Column("history", JSON),
+)
+
+announcements = Table(
+    "announcements",
+    metadata,
+    Column("company_id", String(100), primary_key=True),
+    Column("announcement_id", String(32), primary_key=True),
+    Column("title", String(300), nullable=False),
+    Column("body", String, nullable=False),
+    Column("is_public", Boolean, nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("published_at", String(40)),
 )
 
 accounts = Table(
@@ -2367,6 +2380,7 @@ def _employee_index(conn: Connection, company_id: str) -> dict[str, dict]:
                 employees.c.department,
                 employees.c.position,
                 employees.c.job_title,
+                employees.c.employment_status,
                 employees.c.annual_leave,
                 employees.c.employee_order,
             ).where(employees.c.company_id == company_id)
@@ -2416,6 +2430,7 @@ def admin_list_employees(company_id: str) -> list[dict]:
                     "department": employee["department"],
                     "position": employee.get("position") or None,
                     "job_title": employee.get("job_title") or None,
+                    "employment_status": employee.get("employment_status"),
                     "remaining_days": leave.get("remaining_days"),
                     "account_status": status,
                     "account_status_label": ACCOUNT_STATUS_LABELS[status],
@@ -2424,6 +2439,114 @@ def admin_list_employees(company_id: str) -> list[dict]:
         return result
 
     return _run_db(operation)
+
+
+def admin_save_employee(
+    company_id: str, employee_id: str, fields: dict, actor: str, *, create: bool
+) -> dict:
+    def operation(conn: Connection) -> dict:
+        company_key = companies.c.company_id == company_id
+        version = conn.execute(
+            select(companies.c.data_version).where(company_key).with_for_update()
+        ).scalar_one()
+        employee_key = and_(
+            employees.c.company_id == company_id,
+            employees.c.employee_id == employee_id,
+        )
+        values = {key: fields[key] for key in ("name", "department", "position", "employment_status")}
+        initial = None
+        if create:
+            employee_exists = conn.execute(
+                select(employees.c.employee_id).where(
+                    employees.c.company_id == company_id,
+                    func.lower(employees.c.employee_id) == employee_id.lower(),
+                )
+            ).first()
+            account_exists = conn.execute(
+                select(accounts.c.account_id).where(
+                    accounts.c.company_id == company_id,
+                    func.lower(accounts.c.account_id) == employee_id.lower(),
+                )
+            ).first()
+            if employee_exists or account_exists:
+                return {"status": "duplicate"}
+            last_order = conn.execute(
+                select(func.max(employees.c.employee_order)).where(employees.c.company_id == company_id)
+            ).scalar_one()
+            conn.execute(insert(employees).values(
+                company_id=company_id, employee_id=employee_id,
+                employee_order=0 if last_order is None else last_order + 1,
+                annual_leave={"remaining_days": fields["remaining_days"]}, **values,
+            ))
+            password = generate_initial_password()
+            account = _account_values(
+                company_id, employee_id, ROLE_EMPLOYEE, password, must_change=True
+            )
+            conn.execute(insert(accounts).values(**account))
+            initial = {"employee_id": employee_id, "name": fields["name"], "initial_password": password}
+        else:
+            row = conn.execute(select(employees.c.annual_leave).where(employee_key)).first()
+            if row is None:
+                return {"status": "not_found"}
+            leave = _safe_json_dict(row.annual_leave) | {"remaining_days": fields["remaining_days"]}
+            conn.execute(update(employees).where(employee_key).values(annual_leave=leave, **values))
+        conn.execute(update(companies).where(company_key).values(data_version=version + 1))
+        _audit(conn, company_id, actor, "employee_added" if create else "employee_updated", employee_id, {})
+        return {"status": "ok", "initial_password": initial}
+
+    result = _run_db(operation, write=True, immediate=True)
+    if result["status"] == "ok":
+        invalidate_company_cache(company_id)
+    return result
+
+
+def list_announcements(company_id: str, *, public_only: bool = False) -> list[dict]:
+    query = select(
+        announcements.c.announcement_id, announcements.c.title, announcements.c.body,
+        announcements.c.is_public, announcements.c.created_at, announcements.c.published_at,
+    ).where(announcements.c.company_id == company_id)
+    if public_only:
+        query = query.where(announcements.c.is_public.is_(True))
+    query = query.order_by(
+        func.coalesce(announcements.c.published_at, announcements.c.created_at).desc(),
+        announcements.c.announcement_id.desc(),
+    )
+    return _run_db(lambda conn: [dict(row) for row in conn.execute(query).mappings()])
+
+
+def admin_save_announcement(
+    company_id: str, actor: str, announcement_id: str | None, title: str, body: str, is_public: bool
+) -> bool:
+    def operation(conn: Connection) -> bool:
+        now = datetime.now(KST).isoformat()
+        values = {"title": title, "body": body, "is_public": is_public}
+        if announcement_id is None:
+            target = uuid4().hex
+            conn.execute(insert(announcements).values(
+                company_id=company_id, announcement_id=target, created_at=now,
+                published_at=now if is_public else None, **values,
+            ))
+        else:
+            target = announcement_id
+            key = and_(
+                announcements.c.company_id == company_id,
+                announcements.c.announcement_id == target,
+            )
+            row = conn.execute(
+                select(announcements.c.is_public, announcements.c.published_at)
+                .where(key).with_for_update()
+            ).first()
+            if row is None:
+                return False
+            published_at = row.published_at
+            if is_public and not row.is_public:
+                published_at = now
+            conn.execute(update(announcements).where(key).values(published_at=published_at, **values))
+        action = "announcement_created" if announcement_id is None else "announcement_updated"
+        _audit(conn, company_id, actor, action, target, {"is_public": is_public})
+        return True
+
+    return _run_db(operation, write=True, immediate=True)
 
 
 def admin_list_accounts(company_id: str) -> list[dict]:
@@ -2470,6 +2593,7 @@ def _admin_ticket(row: dict, people: dict[str, dict]) -> dict:
         "purpose": record.get("purpose") or "",
         "status": record.get("status"),
         "created_at": record.get("created_at"),
+        "scheduled_date": record.get("scheduled_date"),
         "history": list(row.get("history") or []),
         "allowed_next": allowed_ticket_transitions(str(record.get("status"))),
     }
@@ -2489,7 +2613,9 @@ def admin_list_tickets(company_id: str) -> list[dict]:
 
 
 def admin_update_ticket(
-    company_id: str, ticket_id: str, to_status: str, actor: str, note: str = ""
+    company_id: str, ticket_id: str, to_status: str, actor: str, note: str = "",
+    *, equipment_only: bool = False, scheduled_date: str | None = None,
+    expected_status: str | None = None, expected_scheduled_date: str | None = None,
 ) -> dict:
     """Returns {"status": "ok"|"not_found"|"invalid_transition"|"note_required", "ticket"}."""
     note = str(note or "").strip()
@@ -2500,28 +2626,49 @@ def admin_update_ticket(
         if row is None:
             return {"status": "not_found"}
         current = str(row["status"])
-        if to_status not in allowed_ticket_transitions(current):
+        changes = {}
+        if equipment_only:
+            if row["type"] != "비품":
+                return {"status": "not_found"}
+            extra = _safe_json_dict(row.get("extra")).copy()
+            if current != expected_status or extra.get("scheduled_date") != expected_scheduled_date:
+                return {"status": "stale"}
+            flow = {"접수완료": 0, "검토중": 0, "승인": 1, "지급완료": 2}
+            if to_status not in {"접수완료", "승인", "지급완료"} or current not in flow or flow[to_status] < flow[current]:
+                return {"status": "invalid_transition", "from": current}
+            # '검토중'은 관리 화면의 '접수'에 속하며 날짜만 바꿀 때 검토 상태를 유지한다.
+            to = current if flow[current] == flow[to_status] else to_status
+            if scheduled_date is None:
+                extra.pop("scheduled_date", None)
+            else:
+                extra["scheduled_date"] = scheduled_date
+            changes["extra"] = extra
+        else:
+            to = to_status
+        if not equipment_only and to not in allowed_ticket_transitions(current):
             return {"status": "invalid_transition", "from": current}
-        if to_status == TICKET_REJECTED and not note:
+        if to == TICKET_REJECTED and not note:
             return {"status": "note_required"}
         entry = {
             "at": datetime.now(KST).isoformat(timespec="seconds"),
             "by": str(actor),
             "from": current,
-            "to": to_status,
+            "to": to,
             "note": note,
         }
         history = list(row.get("history") or []) + [entry]
-        conn.execute(update(tickets).where(key).values(status=to_status, history=history))
+        if equipment_only:
+            entry["scheduled_date"] = scheduled_date
+        conn.execute(update(tickets).where(key).values(status=to, history=history, **changes))
         _audit(
             conn,
             company_id,
             actor,
             "ticket_status_changed",
             ticket_id,
-            {"from": current, "to": to_status, "note": note},
+            {k: v for k, v in entry.items() if k not in ("at", "by")},
         )
-        updated = dict(row) | {"status": to_status, "history": history}
+        updated = dict(row) | changes | {"status": to, "history": history}
         return {
             "status": "ok",
             "ticket": _admin_ticket(updated, _employee_index(conn, company_id)),
@@ -2648,7 +2795,7 @@ def clear_tables_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 # 테스트가 흔히 바꾸는 표. 회사 정적 데이터(규정·사원 등)는 data_version으로 변경을 감지한다.
-_BASELINE_TABLES = (tickets, accounts, audit_log)
+_BASELINE_TABLES = (tickets, announcements, accounts, audit_log)
 
 
 def _require_testing() -> None:

@@ -56,6 +56,21 @@ def _version(company_id=A) -> int:
     return storage.get_company(company_id)["data_version"]
 
 
+def test_new_admin_tools_reject_employee_and_isolate_company_announcements():
+    assert s.ui_admin_list_policies(A, "EMP001")["code"] == "PERMISSION_DENIED"
+    assert s.ui_admin_save_announcement(A, "EMP001", "일반 사원", "본문", True)["code"] == "PERMISSION_DENIED"
+    assert s.ui_admin_save_announcement(A, "ADMIN", "공개 공지", "공개 본문", True)["ok"]
+    assert s.ui_admin_save_announcement(A, "ADMIN", "비공개 공지", "비공개 본문", False)["ok"]
+    notices = s.ui_admin_list_announcements(A, "ADMIN")["data"]["announcements"]
+    assert {n["title"] for n in notices} == {"공개 공지", "비공개 공지"}
+    assert s.ui_admin_save_announcement(
+        B, "ADMIN", "다른 회사 수정", "본문", True, notices[0]["announcement_id"]
+    )["code"] == "NOT_FOUND"
+    visible = s.ui_get_sidebar(A, "EMP001")["data"]["announcements"]
+    assert [n["title"] for n in visible] == ["공개 공지"]
+    assert s.ui_get_sidebar(B, "EMP001")["data"]["announcements"] == []
+
+
 # ---- 업로드: 형식 검사 ---------------------------------------------------------
 
 def test_invalid_json_reports_line_number():

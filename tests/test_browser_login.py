@@ -112,8 +112,9 @@ def browser():
 def _login(browser, url: str, code: str, account_id: str, password: str):
     page = browser.new_page()
     page.goto(url)
+    page.get_by_role("button", name="로그인", exact=True).click()
     page.get_by_label("회사 코드").fill(code)
-    page.get_by_label("아이디").fill(account_id)
+    page.get_by_label("사번").fill(account_id)
     page.get_by_label("비밀번호").fill(password)
     page.get_by_label("비밀번호").press("Enter")
     return page
@@ -132,17 +133,25 @@ def test_bridgesoft_employee_logs_in_from_real_browser(
 ):
     page = _login(browser, app_url, code, account_id, password or _json_password(account_id))
     try:
-        page.get_by_text("나의 온보딩").first.wait_for(timeout=30_000)
+        page.get_by_role("heading", name="나의 온보딩", exact=True).wait_for(timeout=30_000)
+        page.get_by_role("heading", name="내 비품 내역", exact=True).wait_for()
         assert page.get_by_text("로그인").count() == 0 or page.get_by_text("로그아웃").count()
         assert page.get_by_text("화면을 불러오는 중 문제가 발생했습니다").count() == 0
     finally:
         page.close()
 
 
-def test_wrong_password_from_real_browser_shows_login_failed(app_url, browser):
+def test_wrong_password_from_real_browser_allows_retry(app_url, browser):
     page = _login(browser, app_url, CODE, "EMP001", "0000x")
     try:
         page.get_by_role("alert").first.wait_for(timeout=30_000)
         assert page.get_by_text("나의 온보딩").count() == 0
+        assert page.get_by_label("회사 코드").input_value() == CODE
+        assert page.get_by_label("사번").input_value() == "EMP001"
+        password = page.get_by_label("비밀번호")
+        assert password.input_value() == ""
+        password.fill("0899")
+        password.press("Enter")
+        page.get_by_role("heading", name="나의 온보딩", exact=True).wait_for(timeout=30_000)
     finally:
         page.close()

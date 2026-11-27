@@ -73,11 +73,15 @@ agent.get_sidebar(company_id, employee_id)
 #      "annual_leave": {"remaining_days": 11, "granted_days": 15, "used_days": 4, "as_of": "2026-11-20"},
 #      "tickets": [   # 본인 티켓만, 최신순
 #        {"ticket_id": "REQ-003", "type": "비품", "item": "마우스", "quantity": 1,
-#         "purpose": "개발 업무용", "status": "접수완료", "created_at": "2026-11-19T13:15:00+09:00"}, ...]}}
+#         "purpose": "개발 업무용", "status": "접수완료",
+#         "created_at": "2026-11-19T13:15:00+09:00", "scheduled_date": None}, ...],
+#      "announcements": [{ "announcement_id": "…", "title": "…", "body": "…",
+#         "is_public": True, "created_at": "…", "published_at": "…" }]}}
 ```
 
 - 현황판 표 컬럼 제안: `티켓 번호 | 구분 | 품목 | 수량 | 상태 | 신청일`
 - 상태 값은 5개 고정: `접수완료`, `검토중`, `승인`, `반려`, `지급완료` (`승인`은 대시보드에 "지급 예정"으로 표시)
+- `scheduled_date`는 YYYY-MM-DD 또는 `None`입니다. `announcements`는 로그인한 사원의 회사에 공개된 공지만 반환합니다.
 - **다시 불러오는 시점**: 응답의 `tickets_changed`가 `True`일 때 (아래 3장)
 
 ### 2-3. 채팅 입력
@@ -116,10 +120,15 @@ if result["pending_ticket"]:
 | `ui_admin_overview` | - | `company_id, company_name, company_code, data_version, counts{policies, employees, locations, handovers, equipment, tickets}, has_data, cache_ttl_seconds` |
 | `ui_admin_preview_upload` | `files=[{"name", "content"}]` | `base_version, fingerprint, kinds, changes[{kind, label, added, updated, removed, unchanged, added_ids, updated_ids, removed_ids, settings_changed}], initial_passwords_to_create, cache_ttl_seconds`. **DB는 바꾸지 않는다** |
 | `ui_admin_apply_upload` | `files, base_version, fingerprint` (미리보기 값 그대로) | `data_version, changes, initial_passwords[{employee_id, name, initial_password}], cache_ttl_seconds` |
-| `ui_admin_list_employees` | - | `employees[{employee_id, name, department, position, job_title, remaining_days, account_status, account_status_label}]` |
+| `ui_admin_list_employees` | - | `employees[{employee_id, name, department, position, job_title, employment_status, remaining_days, account_status, account_status_label}]` |
 | `ui_admin_employee_detail` | `employee_id` | `employee, annual_leave, tickets, handovers[{handover_id, title, last_updated, summary}], account_status, account_status_label` |
-| `ui_admin_list_tickets` | - | `tickets[{ticket_id, employee_id, name, department, type, item, quantity, purpose, status, created_at, history, allowed_next}]` (최신순) |
+| `ui_admin_save_employee` | `employee_id, employee_name, department, position, remaining_days, employment_status, create` | `initial_password` (등록 직후 `{employee_id, name, initial_password}`, 수정 시 `None`) |
+| `ui_admin_list_tickets` | - | `tickets[{ticket_id, employee_id, name, department, type, item, quantity, purpose, status, created_at, scheduled_date, history, allowed_next}]` (최신순) |
 | `ui_admin_update_ticket` | `ticket_id, to_status, note=""` | `ticket` (위와 같은 형태) |
+| `ui_admin_save_equipment` | `ticket_id, to_status, expected_status, scheduled_date=None, expected_scheduled_date=None` | `ticket` (비품 상태와 예정일 저장) |
+| `ui_admin_list_announcements` | - | `announcements` (위 사원 공지 형태와 동일, 비공개 포함) |
+| `ui_admin_save_announcement` | `title, body, is_public, announcement_id=None` | `None`. ID가 없으면 작성, 있으면 수정 |
+| `ui_admin_list_policies` | - | `policies[{id, category, article, title, content, keywords, source, source_version}], data_version` (챗봇 규정 원문, 조회 전용) |
 | `ui_admin_list_accounts` | - | `accounts[{employee_id, name, department, account_status, account_status_label, failed_count, locked_until}]` |
 | `ui_admin_reset_password` | `employee_id` | `{employee_id, initial_password}` (새 4자리, `must_change=True`) |
 | `ui_admin_unlock_account` | `employee_id` | `None` |
@@ -127,8 +136,9 @@ if result["pending_ticket"]:
 - 업로드 `files`는 메모리의 텍스트다(파일로 저장하지 않음). 종류는 파일 이름(`policies.json` 등)이나 내용의 목록 키로 정한다. 파일당 2MB, JSON만.
 - 업로드 실패: `UPLOAD_EMPTY`, `UPLOAD_INVALID`(`data.issues[{file, item, field, problem, message}]`), `UPLOAD_STALE`(미리보기 이후 데이터·파일이 바뀜 → 다시 미리보기).
 - 티켓 상태: `접수완료 → 검토중 → 승인 → 지급완료`, `반려`는 접수완료·검토중·승인에서만(사유 필수). 실패 코드 `INVALID_TRANSITION`, `NOTE_REQUIRED`, `NOT_FOUND`.
+- 비품 관리 탭에서는 접수완료·검토중을 접수, 승인을 지급 예정, 지급완료를 지급 완료로 표시합니다. 저장할 때 상세를 연 시점의 상태와 예정일이 달라졌으면 `STALE_TICKET`을 반환합니다.
 - 관리자 비밀번호 변경은 `agent.change_password(company_id, "ADMIN", old, new)`.
-- **비밀번호 원문이 응답에 들어가는 곳은 `ui_admin_apply_upload.initial_passwords`와 `ui_admin_reset_password.initial_password` 두 곳뿐이다.** 화면에 한 번만 보여 주고(CSV 다운로드 가능) 저장하지 않는다. 해시·솔트는 어디에도 나오지 않는다.
+- 초기 비밀번호는 `ui_admin_apply_upload`, `ui_admin_reset_password`, `ui_admin_save_employee`가 새로 발급할 때만 관리자에게 표시합니다. 비밀번호 원문은 영구 저장하지 않으며 해시·솔트는 응답에 들어가지 않습니다.
 - 로그인·등록·관리자 툴은 `LLM_TOOLS`에 넣지 않는다.
 
 ---

@@ -23,11 +23,12 @@ from __future__ import annotations
 import argparse
 import hmac
 import logging
+import math
 import os
 import re
 import sys
 from functools import wraps
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -988,6 +989,47 @@ def ui_admin_list_employees(company_id: str, actor_account_id: str) -> dict:
 
 @mcp.tool
 @_storage_safe
+def ui_admin_save_employee(
+    company_id: str, actor_account_id: str, employee_id: str, employee_name: str,
+    department: str, position: str, remaining_days: float, employment_status: str,
+    create: bool,
+) -> dict:
+    """[UI 전용·관리자] 현재 회사의 사원 등록 또는 인사 정보 수정."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    employee_id, name, department, position = (
+        value.strip() for value in (employee_id, employee_name, department, position)
+    )
+    if (
+        not employee_id or len(employee_id) > 100 or employee_id.upper() == storage.ADMIN_ACCOUNT_ID
+        or not name or len(name) > 300 or not department or len(department) > 300
+        or not position or len(position) > 200
+        or not math.isfinite(remaining_days) or remaining_days < 0
+        or employment_status not in {"재직", "휴직", "퇴사"}
+    ):
+        return fail("INVALID_EMPLOYEE", "사원 정보와 잔여 연차를 확인해 주세요.")
+    result = storage.admin_save_employee(
+        company_id, employee_id,
+        {
+            "name": name, "department": department, "position": position,
+            "remaining_days": remaining_days, "employment_status": employment_status,
+        },
+        actor_account_id, create=create,
+    )
+    if result["status"] == "duplicate":
+        return fail("DUPLICATE_EMPLOYEE", "이미 이 회사에 등록된 사번입니다.")
+    if result["status"] == "not_found":
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    return ok(
+        "REGISTERED" if create else "UPDATED",
+        data={"initial_password": result["initial_password"]},
+        message="사원이 등록되었습니다." if create else "사원 정보가 저장되었습니다.",
+    )
+
+
+@mcp.tool
+@_storage_safe
 def ui_admin_employee_detail(
     company_id: str, actor_account_id: str, employee_id: str
 ) -> dict:
@@ -1060,6 +1102,84 @@ def ui_admin_update_ticket(
     if result["status"] == "note_required":
         return fail("NOTE_REQUIRED", MSG["TICKET_NOTE_REQUIRED"])
     return ok("UPDATED", data={"ticket": result["ticket"]}, message=MSG["TICKET_UPDATED"])
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_save_equipment(
+    company_id: str, actor_account_id: str, ticket_id: str,
+    to_status: Literal["접수완료", "승인", "지급완료"], expected_status: str,
+    scheduled_date: str | None = None, expected_scheduled_date: str | None = None,
+) -> dict:
+    """[UI 전용·관리자] 비품 지급 상태와 예정일을 한 번에 저장한다."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    if scheduled_date is not None:
+        try:
+            scheduled_date = date.fromisoformat(scheduled_date).isoformat()
+        except ValueError:
+            return fail("INVALID_DATE", "지급 예정일을 확인해 주세요.")
+    result = storage.admin_update_ticket(
+        company_id, ticket_id, to_status, actor_account_id, equipment_only=True,
+        scheduled_date=scheduled_date, expected_status=expected_status,
+        expected_scheduled_date=expected_scheduled_date,
+    )
+    if result["status"] == "not_found":
+        return fail("NOT_FOUND", MSG["TICKET_NOT_FOUND"])
+    if result["status"] == "stale":
+        return fail("STALE_TICKET", "신청 정보가 변경되었습니다. 목록에서 다시 열어 주세요.")
+    if result["status"] != "ok":
+        return fail("INVALID_TRANSITION", "비품 지급 상태는 접수, 지급 예정, 지급 완료 순으로 변경할 수 있습니다.")
+    return ok("UPDATED", data={"ticket": result["ticket"]}, message="비품 신청 정보가 저장되었습니다.")
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_announcements(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 현재 회사의 공개·비공개 공지 목록."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    return ok(data={"announcements": storage.list_announcements(company_id)})
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_save_announcement(
+    company_id: str, actor_account_id: str, title: str, body: str, is_public: bool,
+    announcement_id: str | None = None,
+) -> dict:
+    """[UI 전용·관리자] 현재 회사의 공지 작성 또는 수정."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    title = title.strip()
+    if not title or len(title) > 300 or not body.strip() or len(body) > 12000:
+        return fail("INVALID_ANNOUNCEMENT", "제목과 본문을 확인해 주세요.")
+    if not storage.admin_save_announcement(company_id, actor_account_id, announcement_id, title, body, is_public):
+        return fail("NOT_FOUND", MSG["DENIED_OR_NOT_FOUND"])
+    message = "공지사항이 등록되었습니다." if announcement_id is None else "공지사항이 저장되었습니다."
+    return ok("SAVED", message=message)
+
+
+@mcp.tool
+@_storage_safe
+def ui_admin_list_policies(company_id: str, actor_account_id: str) -> dict:
+    """[UI 전용·관리자] 챗봇이 사용하는 현재 회사 규정과 조항 원문."""
+    denied = _require_admin(company_id, actor_account_id)
+    if denied:
+        return denied
+    document = load(company_id, "policies")
+    rows = [
+        {
+            **{k: row.get(k) for k in ("id", "category", "article", "title", "content", "keywords")},
+            "source": row.get("source") or document.get("source_title"),
+            "source_version": row.get("source_version") or row.get("version"),
+        }
+        for row in document["policies"]
+    ]
+    return ok(data={"policies": rows, "data_version": document.get("data_version")})
 
 
 @mcp.tool
@@ -1150,10 +1270,12 @@ def ui_get_sidebar(company_id: str, employee_id: str) -> dict:
                         "purpose",
                         "status",
                         "created_at",
+                        "scheduled_date",
                     )
                 }
                 for t in tickets
             ],
+            "announcements": storage.list_announcements(company_id, public_only=True),
         }
     )
 
