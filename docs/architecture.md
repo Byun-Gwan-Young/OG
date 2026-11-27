@@ -270,7 +270,7 @@ python -m pytest -q --pg-all                         # PostgreSQL에서도 전�
 | `test_mcp_connect.py` | 9 | AI 앱 연결 카드: 발급 원문 한 번만·폐기, 안내 명령에 공개 MCP 주소, 관리자 현황·강제 폐기(같은 회사만), 미리보기에서 발급·폐기 불가, LLM 툴 아님 |
 | `test_proxy.py` | 5 | 프록시 헤더(X-Forwarded-Proto)가 https면 로그인 쿠키 Secure, config.toml 배포 설정, PORT 환경변수 |
 | `test_deploy_tools.py` | 4 | 로컬 웹·MCP 서버에 warmup.py·deploy_check.py 실행(PWA 파일, /health, 잘못된 토큰 401, http 경고·실패) |
-| `test_deploy_config.py` | — | EC2 구성: render.yaml·onrender.com 없음, compose에서 web·mcp 포트 미공개·헬스체크·재시작·로그 제한·인증서 볼륨, Dockerfile(pwa_setup·비 root·버전), Caddyfile, .env.production 제외, deploy 스크립트 |
+| `test_deploy_config.py` | 16 | EC2 구성: Render 설정 파일·주소 흔적 없음, compose에서 web·mcp 포트 미공개·헬스체크·재시작·로그 제한·인증서 볼륨, Dockerfile(pwa_setup·비 root·버전), Caddyfile, .env.production 제외, deploy 스크립트(가짜 docker로 deploy.sh 성공·실패 시 로그 50줄·필수 값 누락, 비밀 값 미출력) |
 | `test_storage.py` | 24 | DB 가져오기 · 재가져오기 티켓 유지 · 롤백 · 캐시 · 동시 발급 · 로그에 주소 미노출 |
 | `test_accounts.py` | 22 | 회사 코드, 로그인 동일 문구·5회 잠금, 해시 저장, 초기 비밀번호, 응답에 비밀번호 없음, LLM 툴 목록 |
 | `test_register.py` | 7 | 회사 등록·가입 코드·ADMIN 로그인, 빈 회사 처리, 관리자 권한 |
