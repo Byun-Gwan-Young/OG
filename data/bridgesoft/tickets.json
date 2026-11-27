@@ -1,9 +1,9 @@
 {
   "company_id": "bridgesoft",
   "company_name": "(주)브릿지소프트",
-  "data_version": "demo-1.5",
+  "data_version": "1.8-bridgesoft-demo-ready",
   "ticket_id_format": "REQ-{sequence:03d}",
-  "next_sequence": 6,
+  "next_sequence": 4,
   "status_values": [
     "접수완료",
     "검토중",
@@ -41,26 +41,6 @@
       "purpose": "개발 업무용",
       "status": "접수완료",
       "created_at": "2026-11-19T13:15:00+09:00"
-    },
-    {
-      "ticket_id": "REQ-004",
-      "employee_id": "EMP001",
-      "type": "비품",
-      "item": "노트북 거치대",
-      "quantity": 1,
-      "purpose": "업무용 (사용 목적 미기재)",
-      "status": "접수완료",
-      "created_at": "2026-11-21T16:26:32+09:00"
-    },
-    {
-      "ticket_id": "REQ-005",
-      "employee_id": "EMP002",
-      "type": "비품",
-      "item": "노트북",
-      "quantity": 1,
-      "purpose": "업무용 (사용 목적 미기재)",
-      "status": "접수완료",
-      "created_at": "2026-11-21T17:01:59+09:00"
     }
   ],
   "creation_rule": {
