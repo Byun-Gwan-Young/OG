@@ -11,18 +11,14 @@ Playwright가 없으면 건너뛴다:
 from __future__ import annotations
 
 import json
-import os
-import socket
 import subprocess
 import sys
-import time
-import urllib.request
 from pathlib import Path
 
 import pytest
 
 playwright_sync = pytest.importorskip("playwright.sync_api")
-from tests.browser_support import launch_chromium  # noqa: E402
+from tests.browser_support import browser_env, launch_chromium, running_app  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE = "TCNCZD"
@@ -44,12 +40,6 @@ storage.reset_employee_passwords("bridgesoft", [{"employee_id": "EMP001", "passw
 """
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
 def _json_password(employee_id: str) -> str:
     rows = json.loads((ROOT / "data" / "bridgesoft" / "employees.json").read_text("utf-8"))
     return next(str(e["password"]) for e in rows["employees"] if e["employee_id"] == employee_id)
@@ -57,46 +47,13 @@ def _json_password(employee_id: str) -> str:
 
 @pytest.fixture(scope="module")
 def app_url(tmp_path_factory):
-    db = tmp_path_factory.mktemp("browser") / "browser.db"
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"DATABASE_URL", "LLM_API_KEY", "LLM_BASE_URL"}
-    }
-    env.update(
-        OFFICEGENIE_TESTING="1",
-        OFFICEGENIE_TEST_FAST_HASH="1",
-        OFFICEGENIE_TEST_DATABASE_URL=f"sqlite:///{db}",
-    )
-    env.pop("OFFICEGENIE_TEST_SCHEMA", None)
+    env = browser_env(tmp_path_factory.mktemp("browser") / "browser.db")
     subprocess.run(
         [sys.executable, "-c", PREPARE, str(ROOT), CODE],
         env=env, cwd=ROOT, check=True, capture_output=True,
     )
-    port = _free_port()
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", str(ROOT / "app.py"),
-         "--server.headless", "true", "--server.port", str(port),
-         "--browser.gatherUsageStats", "false"],
-        env=env, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    url = f"http://127.0.0.1:{port}"
-    try:
-        for _ in range(120):
-            try:
-                urllib.request.urlopen(f"{url}/_stcore/health", timeout=1)
-                break
-            except OSError:
-                time.sleep(0.5)
-        else:
-            pytest.fail("Streamlit이 시작되지 않았습니다.")
+    with running_app(env) as url:
         yield url
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
 
 
 @pytest.fixture(scope="module")

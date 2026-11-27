@@ -35,7 +35,26 @@ POST_LOGIN_ERROR = (
 CONNECTION_ERROR = "사내 시스템 연결이 일시적으로 원활하지 않습니다."
 _SAFE_MESSAGE_ERRORS = (KeyError, IndexError, AttributeError, TypeError, ValueError)
 
-st.set_page_config(page_title="오피스 지니 | 신입사원 온보딩", layout="wide")
+_PWA_ICON = PROJECT_ROOT / "pwa" / "icon-192.png"
+st.set_page_config(
+    page_title="오피스 지니 | 신입사원 온보딩",
+    page_icon=str(_PWA_ICON) if _PWA_ICON.is_file() else None,
+    layout="wide",
+)
+PWA_MARKER = "<!-- officegenie-pwa:start -->"
+
+
+@st.cache_resource
+def _check_pwa_setup() -> bool:
+    """서버 시작 시 한 번: PWA 태그가 Streamlit 정적 폴더에 들어갔는지 확인한다(화면 오류는 아님)."""
+    static_dir = Path(st.__file__).resolve().parent / "static"
+    try:
+        applied = PWA_MARKER in (static_dir / "index.html").read_text("utf-8") and (static_dir / "sw.js").is_file()
+    except OSError:
+        applied = False
+    if not applied:
+        log.warning("PWA 설정이 적용되지 않았습니다. python scripts/pwa_setup.py 실행 필요")
+    return applied
 
 WELCOME_TEXT = "안녕하세요. 온보딩이나 비품 지급에 대해 궁금한 점을 물어보세요."
 SUGGESTED_QUESTION = "제 모니터는 언제 받을 수 있나요?"
@@ -2008,30 +2027,6 @@ def _render_shell_styles() -> None:
         .preview-label { color: var(--amber); font-size: 14px; font-weight: 700; }
         .st-key-preview_close button { min-height: 40px; background: var(--card); border-color: #EED9AE; color: var(--amber); }
 
-        @media (max-width: 1023.98px) {
-            .st-key-home_widgets { grid-template-columns: minmax(0, 1fr); }
-        }
-        @media (max-width: 767.98px) {
-            .st-key-home_layout, .st-key-admin_home_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-            .st-key-home_id_column { position: static; }
-            .id-card-body { padding: 22px 20px 18px; }
-            .id-avatar { width: 88px; height: 88px; font-size: 36px; }
-            h2.id-name { font-size: 25px; }
-            .st-key-home_widgets { gap: 14px; }
-            [class*="st-key-home_widget_"] { min-height: 0; padding: 18px 18px 8px; }
-            .st-key-preview_banner { top: 60px; }
-            .st-key-notice_board, .st-key-library_board, .st-key-equipment_board { padding: 16px; }
-            [class*="st-key-notice_admin_row_"] { flex-wrap: wrap !important; }
-            [class*="st-key-notice_admin_row_"] > div:first-child { flex-basis: 100% !important; }
-            [class*="st-key-lib_"][class*="_row_"], [class*="st-key-admin_res_row_"] { flex-wrap: wrap !important; }
-            [class*="st-key-lib_"][class*="_row_"] > div:nth-child(2),
-            [class*="st-key-admin_res_row_"] > div:nth-child(2) { flex-basis: calc(100% - 60px) !important; }
-            .handover-body { padding-left: 18px; }
-            .st-key-equipment_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-            .st-key-equipment_form, .st-key-equipment_history { padding: 16px; }
-            .my-ticket-body { padding-left: 4px; }
-        }
-
         /* ---- 공지사항 ---- */
         .st-key-notice_board, .st-key-library_board, .st-key-equipment_board {
             padding: 24px; background: var(--card); border: 1px solid var(--line);
@@ -2157,6 +2152,31 @@ def _render_shell_styles() -> None:
         .timeline-step.status-scheduled { color: var(--amber); }
         .timeline-step.status-received, .timeline-step.status-review { color: #5A77A9; }
         .timeline-step.status-rejected { color: #A34D46; }
+
+        /* ---- 반응형: 위 영역들의 좁은 화면 규칙(기본 규칙 뒤에 둔다) ---- */
+        @media (max-width: 1023.98px) {
+            .st-key-home_widgets { grid-template-columns: minmax(0, 1fr); }
+        }
+        @media (max-width: 767.98px) {
+            .st-key-home_layout, .st-key-admin_home_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            .st-key-home_id_column { position: static; }
+            .id-card-body { padding: 22px 20px 18px; }
+            .id-avatar { width: 88px; height: 88px; font-size: 36px; }
+            h2.id-name { font-size: 25px; }
+            .st-key-home_widgets { gap: 14px; }
+            [class*="st-key-home_widget_"] { min-height: 0; padding: 18px 18px 8px; }
+            .st-key-preview_banner { top: 60px; }
+            .st-key-notice_board, .st-key-library_board, .st-key-equipment_board { padding: 16px; }
+            [class*="st-key-notice_admin_row_"] { flex-wrap: wrap !important; }
+            [class*="st-key-notice_admin_row_"] > div:first-child { flex-basis: 100% !important; }
+            [class*="st-key-lib_"][class*="_row_"], [class*="st-key-admin_res_row_"] { flex-wrap: wrap !important; }
+            [class*="st-key-lib_"][class*="_row_"] > div:nth-child(2),
+            [class*="st-key-admin_res_row_"] > div:nth-child(2) { flex-basis: calc(100% - 60px) !important; }
+            .handover-body { padding-left: 18px; }
+            .st-key-equipment_layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            .st-key-equipment_form, .st-key-equipment_history { padding: 16px; }
+            .my-ticket-body { padding-left: 4px; }
+        }
 
         /* ---- 모바일 하단 탭바: PC에서는 숨긴다 ---- */
         .st-key-bottom_tabs { display: none !important; }
@@ -4953,6 +4973,7 @@ ADMIN_PAGES = {
 
 
 def main() -> None:
+    _check_pwa_setup()
     _render_styles()
     _render_shell_styles()
     _restore_login()
