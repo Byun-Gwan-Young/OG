@@ -82,6 +82,32 @@ def import_all_with_seed_tickets() -> None:
         import_company.import_company_directory(DATA_ROOT / company_id, reset_tickets=True)
 
 
+def _drop_cached_agents() -> None:
+    """Streamlit AppTest가 캐시한 agent(와 그 MCP 하위 프로세스)를 닫고 캐시를 비운다.
+
+    agent는 만들 때의 환경(OFFICEGENIE_TEST_DATABASE_URL)으로 MCP 서버를 띄운다. DB 종류가 바뀐 뒤에도
+    캐시된 agent를 쓰면 화면 테스트가 이전 DB(예: SQLite)에 로그인해 실패하므로, DB를 바꿀 때마다 비운다.
+    """
+    import gc
+    import sys
+
+    agent_module = sys.modules.get("agent")
+    if agent_module is not None:
+        for obj in gc.get_objects():
+            # 이미 닫힌 agent(이벤트 루프가 멈춘 것)는 다시 닫지 않는다(닫기 대기 시간 방지).
+            if isinstance(obj, agent_module.OfficeGenieAgent) and obj._loop.is_running():
+                try:
+                    obj.close()
+                except Exception:
+                    pass
+    try:
+        import streamlit as st
+
+        st.cache_resource.clear()
+    except Exception:
+        pass
+
+
 def _build_baseline() -> dict:
     """테이블을 새로 만들고 data/ + seed 티켓을 가져온 뒤 기준 상태를 기록한다."""
     storage.recreate_tables_for_tests()
@@ -105,11 +131,13 @@ def db_backend(request, tmp_path_factory):
     if schema:
         os.environ["OFFICEGENIE_TEST_SCHEMA"] = schema
     storage.configure_database(url, schema=schema)
+    _drop_cached_agents()
     state = {"name": request.param, "url": url, "schema": schema}
     state["baseline"] = _build_baseline()
     try:
         yield state
     finally:
+        _drop_cached_agents()
         storage.close_engine()
         os.environ.pop("OFFICEGENIE_TEST_DATABASE_URL", None)
         os.environ.pop("OFFICEGENIE_TEST_SCHEMA", None)
