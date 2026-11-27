@@ -68,6 +68,7 @@
 | **사원 › 사원 상세** | 부서 필터, 이름·사번 검색. 행을 선택하면 인사 정보, 연차, 신청 내역, 소속 부서 인수인계서 요약 |
 | **데이터·계정 › 사내 규정** | 챗봇이 답변에 쓰는 규정 원문 검색·열람 |
 | **데이터·계정 › 계정** | 사원 계정 상태(정상/잠금/변경 필요/비활성), 비밀번호 초기화(새 4자리, 한 번만 표시), 잠금 해제, 관리자 비밀번호 변경. 비밀번호를 초기화하면 그 사원의 로그인 세션도 끝납니다 |
+| **데이터·계정 › AI 앱 연결** | 사원이 홈에서 발급한 AI 앱 연결 토큰 현황(사번·이름·토큰 이름·발급일·마지막 사용·상태)과 **강제 폐기**. 토큰 원문은 저장하지 않아 관리자도 볼 수 없고, 폐기하면 그 AI 앱은 바로 연결이 끊깁니다 |
 
 관리자의 조회·변경·업로드는 모두 감사 로그(`audit_log`)에 기록됩니다.
 
@@ -91,6 +92,7 @@
 
 - 위쪽 노란 띠에 "직원 화면 미리보기 · 이름(사번) · 읽기 전용"이 표시됩니다. **미리보기 닫기**로 돌아갑니다.
 - 읽기 전용입니다. 신청·변경 버튼과 챗봇이 없고, 관리자 세션으로는 신청이 만들어지지 않습니다.
+- **AI 앱 연결** 카드는 안내 문구만 보이고 토큰 발급·폐기 버튼이 없습니다. 서버도 관리자 세션의 발급·폐기를 거부합니다.
 - 서버가 관리자 계정과 같은 회사 사원인지 다시 확인하고, 볼 때마다 감사 로그(`preview_employee`)를 남깁니다.
 
 ---
@@ -148,7 +150,7 @@ LLM_BASE_URL=https://.../v1      # Jitda 설정 화면의 API 주소
 > 🔐 **DB 주소는 비밀번호가 들어 있는 비밀 정보입니다.** `.env`에만 두고 채팅·문서·스크린샷·커밋에 넣지 마세요. 서버 로그와 오류 메시지에는 주소가 나오지 않습니다.
 
 - **테스트는 dev 브랜치에서만** 돌립니다. `pytest`는 `DATABASE_URL`(운영 DB)에 절대 연결하지 않고, 기본은 임시 SQLite입니다. `TEST_DATABASE_URL`이 있으면 그 DB에 임시 스키마를 만들어 DB 종류에 따라 결과가 달라질 수 있는 테스트(`@pytest.mark.pg`)만 한 번 더 돌린 뒤 지웁니다. 전부 돌리려면 `pytest --pg-all`(오래 걸림). 두 주소가 같으면 테스트가 바로 중단됩니다.
-- **인터넷이 안 되거나 DB 없이 써 보고 싶으면** `.env`에서 `DATABASE_URL` 줄을 지우세요. 프로젝트 폴더의 `officegenie.db`(로컬 SQLite)로 동작하며 시작 로그에 "로컬 SQLite 사용 중"이 나옵니다. 이 경우에도 처음 한 번은 `python scripts/import_company.py --all`을 실행합니다.
+- **인터넷이 안 되거나 DB 없이 써 보고 싶으면**(로컬 개발 한정) `.env`에서 `DATABASE_URL` 줄을 지우세요. 프로젝트 폴더의 `officegenie.db`(로컬 SQLite)로 동작하며 시작 로그에 "로컬 SQLite 사용 중"이 나옵니다. 이 경우에도 처음 한 번은 `python scripts/import_company.py --all`을 실행합니다.
 - DB가 비어 있으면 서버가 "python scripts/import_company.py --all을 먼저 실행하세요"라고 안내합니다. DB에 연결할 수 없으면 화면에는 "사내 시스템 연결이 일시적으로 원활하지 않습니다"가 나옵니다.
 
 ## 4. 웹 화면 실행
@@ -181,10 +183,7 @@ DB에는 토큰의 해시만 저장되며, 30분 무동작·12시간 경과·로
 ## 5. AI 앱용 MCP 서버 실행 (선택)
 
 ```bash
-python scripts/issue_token.py bridgesoft EMP001 --name "김신입"   # 사람마다 토큰 발급
-python scripts/issue_token.py --list                              # 발급 목록
-python scripts/issue_token.py --revoke og_abcd1234                # 폐기 (앞 8자리)
-python remote_server.py                                           # http://<서버 주소>:8000
+python remote_server.py          # http://localhost:8000 (PORT 환경변수로 포트 변경)
 ```
 
 | 주소 | 내용 | 토큰 |
@@ -193,12 +192,86 @@ python remote_server.py                                           # http://<서�
 | `/mcp` | MCP 엔드포인트 (Streamable HTTP) | **필요** |
 | `/health` | 상태 확인 | 불필요 |
 
-- 직원에게는 `http://<서버 주소>:8000/mcp` 주소와 **본인 토큰**을 전달합니다. 연결 방법은 [AI 앱 연결 가이드](guide-mcp.md)를 공유하면 됩니다.
-- 토큰을 발급하거나 폐기한 뒤에는 서버를 다시 시작하세요.
+- **토큰은 사원이 직접 발급합니다.** 웹에 로그인해 홈의 **AI 앱 연결** 카드에서 이름을 붙여 발급하고(1인 최대 3개),
+  필요 없어지면 폐기합니다. 원문은 발급할 때 한 번만 보입니다. 연결 방법은 [AI 앱 연결 가이드](guide-mcp.md)를 공유하세요.
+- 토큰은 DB의 `mcp_tokens` 표에 **SHA-256 해시로만** 저장됩니다. MCP 서버는 요청마다 DB를 확인하므로
+  발급·폐기가 **서버 재시작 없이 바로** 반영됩니다. 웹 서비스와 MCP 서버가 같은 `DATABASE_URL`을 써야 합니다.
+- 회사 관리자는 **데이터·계정 > AI 앱 연결** 탭에서 사원별 토큰 현황(이름·발급일·마지막 사용일)을 보고 강제 폐기할 수 있습니다.
+  발급·폐기·조회는 감사 로그에 남습니다. 계정이 비활성화·잠금되면 그 사원의 토큰도 거부됩니다.
+- 사원 홈의 연결 안내에 나오는 주소는 `OFFICEGENIE_MCP_PUBLIC_URL`(예: `https://officegenie-mcp.onrender.com`)입니다.
+  비어 있으면 "운영자가 아직 설정하지 않았다"고 표시됩니다.
+- 운영자용 CLI (지원·점검용):
 
-> ⚠️ 토큰은 `tokens.json`에 평문으로 저장되는 **개발 · 시연용 방식**입니다(저장소에는 올라가지 않음). 실제 운영에서는 OAuth 등 정식 인증과 HTTPS를 사용하세요. 사내 네트워크 밖에서 접속하게 하려면 서버 배포나 터널 도구가 필요합니다.
+  ```bash
+  python scripts/issue_token.py bridgesoft EMP001 --name "점검용"   # 발급 (원문은 이때 한 번만 출력)
+  python scripts/issue_token.py --list [--all]                      # 목록 (--all: 폐기된 것 포함)
+  python scripts/issue_token.py --revoke <토큰 원문>                 # 원문으로 폐기
+  python scripts/issue_token.py --revoke-id bridgesoft <token_id>   # 목록의 token_id로 폐기
+  ```
 
-## 6. 운영
+> 예전 방식의 `tokens.json`은 더 이상 읽지 않습니다. 남아 있다면 지워도 되며, 사원에게 홈에서 새 토큰을 발급받게 하세요.
+
+## 6. Render 배포하기
+
+웹(`officegenie-web`)과 원격 MCP 서버(`officegenie-mcp`) 두 서비스를 Render 무료 플랜에 올리고, 둘 다 같은 Neon PostgreSQL을 씁니다.
+설정은 저장소 루트의 `render.yaml`(Blueprint)에 있습니다.
+
+```
+사원 브라우저 ──https──▶ officegenie-web (Streamlit) ─┐
+사원 AI 앱   ──https──▶ officegenie-mcp (/mcp)       ─┴──▶ Neon PostgreSQL (DATABASE_URL)
+```
+
+> ⚠️ Render 무료 서비스는 재시작하거나 잠들 때 **서버 안의 파일이 사라집니다.** 그래서 모든 상태(회사 데이터, 계정, 세션, 티켓,
+> 자료실 파일, MCP 토큰)는 DB에만 저장합니다. `OFFICEGENIE_ENV=production`에서 `DATABASE_URL`이 없거나 SQLite이면
+> 서비스가 시작 단계에서 오류로 멈춥니다(로컬 SQLite로 넘어가지 않음).
+
+1. **GitHub 연결**: Render 대시보드 → Account Settings → GitHub에서 이 저장소에 접근을 허용합니다.
+2. **Blueprint로 배포**: New → Blueprint → 저장소 선택. `render.yaml`을 읽어 두 서비스가 보입니다.
+   - 웹 빌드 `pip install -r requirements.txt && python scripts/pwa_setup.py`, 시작 `python scripts/preflight.py && streamlit run app.py …`
+   - MCP 빌드 `pip install -r requirements.txt`, 시작 `python remote_server.py` (Render가 주는 `PORT`, 0.0.0.0)
+   - 헬스 체크: 웹 `/_stcore/health`, MCP `/health`. Python 버전은 `PYTHON_VERSION`(= `.python-version`)으로 고정
+3. **환경변수 입력**: Blueprint 화면에서 `sync: false` 값을 두 서비스 모두에 넣습니다.
+
+   | 변수 | 값 |
+   |---|---|
+   | `DATABASE_URL` | Neon **main** 브랜치 연결 주소 (두 서비스 같은 값) |
+   | `LLM_API_KEY`, `LLM_BASE_URL` | Jitda 키와 주소 (웹 챗봇이 씀) |
+   | `OFFICEGENIE_SIGNUP_CODE` | 회사 등록 가입 코드 (비우면 누구나 등록) |
+   | `OFFICEGENIE_MCP_PUBLIC_URL` | 처음에는 비워 둡니다(4단계에서 입력) |
+
+   `OFFICEGENIE_ENV=production`은 `render.yaml`에 이미 들어 있습니다.
+4. **첫 배포 후 MCP 주소 설정**: 배포가 끝나면 `officegenie-mcp`의 주소(예: `https://officegenie-mcp.onrender.com`)를 복사해
+   **두 서비스의** `OFFICEGENIE_MCP_PUBLIC_URL`에 넣고 다시 배포(Manual Deploy → Deploy latest commit)합니다.
+   웹은 사원 홈의 연결 안내에, MCP 서버는 안내 홈페이지에 이 주소를 씁니다.
+5. **Neon 데이터 확인**: 내 PC에서 `.env`의 `DATABASE_URL`을 같은 main 브랜치로 두고 실행합니다.
+
+   ```bash
+   python scripts/import_company.py --all       # 처음 한 번 (이미 있으면 티켓은 그대로 둠)
+   python scripts/list_companies.py             # 회사 코드 확인
+   python scripts/set_admin_password.py <company_id>
+   ```
+
+6. **깨우기와 점검**:
+
+   ```bash
+   python scripts/warmup.py https://officegenie-web.onrender.com https://officegenie-mcp.onrender.com
+   python scripts/deploy_check.py https://officegenie-web.onrender.com https://officegenie-mcp.onrender.com
+   ```
+
+   `deploy_check.py`는 웹 응답, PWA 파일(manifest·서비스 워커·오프라인 화면), HTTPS, MCP `/health`, 잘못된 토큰 거부를 자동으로
+   확인하고, 실제 로그인·토큰 발급이 필요한 항목은 수동 확인 목록으로 출력합니다. 실패가 0개면 종료 코드 0입니다.
+7. **회사 관리자에게 웹 주소 공유**: `https://officegenie-web.onrender.com`과 회사 코드를 전달합니다. 사원은 같은 주소에서
+   로그인하고, 휴대폰에서는 홈 화면에 추가(PWA)할 수 있습니다.
+
+- **잠들기**: 무료 플랜은 15분 동안 요청이 없으면 잠들고, 깨는 데 최대 1분쯤 걸립니다. 로그인 화면에 안내가 있고,
+  시연 전에는 `warmup.py`로 미리 깨워 두세요.
+- **프록시**: Render는 HTTPS를 앞단에서 처리하고 앱에는 HTTP로 넘깁니다. 앱은 `X-Forwarded-Proto`/`X-Forwarded-Host`를 보고
+  로그인 쿠키에 `Secure`를 붙이고, MCP 안내 홈페이지에 https 주소를 표시합니다.
+- **PWA**: 웹 시작 시 `preflight.py`와 앱이 `pwa_setup.py` 적용 여부를 확인하고, 미적용이면 로그에 경고를 남깁니다.
+- 운영 화면에서는 `render.yaml`의 `STREAMLIT_CLIENT_SHOW_ERROR_DETAILS=none`, `STREAMLIT_CLIENT_TOOLBAR_MODE=viewer`로
+  오류 상세와 개발자 메뉴를 숨깁니다.
+
+## 7. 운영
 
 | 하고 싶은 것 | 방법 |
 |---|---|
@@ -210,12 +283,12 @@ python remote_server.py                                           # http://<서�
 | 시연 후 신청 내역 초기화 | `python scripts/import_company.py --all --reset-tickets` (seed/의 티켓으로 교체, 이미 쓴 번호는 다시 쓰지 않음) |
 | 시연 전 사원 비밀번호 되돌리기 | `python scripts/import_company.py --all --reset-employee-passwords` (employees.json의 password로 다시 해시, 잠금·실패 횟수 초기화, ADMIN 제외. 바꾼 인원 수만 출력) |
 | 가져오기 오류 | JSON을 전부 검사한 뒤에 DB를 바꿉니다(관리자 업로드와 같은 검증). 오류가 있으면 파일명과 항목 번호를 보여 주고 아무것도 바꾸지 않습니다. |
-| 기존 DB 업그레이드 | 서버·스크립트가 시작할 때 `init_db()`가 새 테이블(`accounts`, `audit_log`, `resources`, `login_sessions`)과 컬럼(`company_code`, 티켓 `history`)을 추가하고, 코드가 없는 회사에 회사 코드를 채웁니다. 기존 데이터는 그대로입니다. |
+| 기존 DB 업그레이드 | 서버·스크립트가 시작할 때 `init_db()`가 새 테이블(`accounts`, `audit_log`, `resources`, `login_sessions`, `mcp_tokens`)과 컬럼(`company_code`, 티켓 `history`)을 추가하고, 코드가 없는 회사에 회사 코드를 채웁니다. 기존 데이터는 그대로입니다. |
 | PWA 설정 확인·되돌리기 | `python scripts/pwa_setup.py --check` / `--undo`. 아이콘을 바꾸려면 `assets/logo.png`를 두고 `python scripts/make_pwa_icons.py` 후 `pwa_setup.py` |
 | 새 회사 추가 | 회사 관리자가 웹에서 직접 등록하는 것이 기본입니다. 폴더로 넣을 때는 [다른 회사에 적용하기](architecture.md#-다른-회사에-적용하기) |
 | LLM 연결 확인 | `python scripts/cli_chat.py bridgesoft EMP001` (실패하면 `[오류 원인]` 출력) |
 
-## 7. 문제 해결
+## 8. 문제 해결
 
 | 증상 | 원인과 해결 |
 |---|---|
@@ -226,25 +299,28 @@ python remote_server.py                                           # http://<서�
 | 관리자 비밀번호 분실 | `python scripts/set_admin_password.py <company_id>` |
 | 챗봇이 "불러오지 못했어요"만 표시 | `.env`의 `LLM_API_KEY`, `LLM_BASE_URL`을 확인하세요. `scripts/cli_chat.py`로 실행하면 `[오류 원인]`이 출력됩니다. |
 | 다른 PC에서 웹 화면 접속 불가 | Windows 방화벽에서 "개인 네트워크 허용"을 선택하고, 같은 네트워크인지 확인하세요. |
-| AI 앱에서 MCP 연결 시 401 | 토큰이 틀렸거나 서버 재시작 전 발급된 토큰입니다. `--list`로 확인 후 서버를 다시 시작하세요. |
+| AI 앱에서 MCP 연결 시 401 | 토큰이 틀렸거나 폐기된 토큰, 또는 계정이 잠금·비활성 상태입니다. 사원이 홈의 AI 앱 연결 카드에서 새로 발급하면 바로 쓸 수 있습니다(재시작 불필요). 웹과 MCP 서버의 `DATABASE_URL`이 같은지도 확인하세요. |
+| Render에서 서비스가 바로 종료됨 | 로그에 "DATABASE_URL이 없습니다"가 있으면 환경변수를 입력하세요. 운영 모드에서는 SQLite로 동작하지 않습니다. |
+| Render 첫 접속이 1분 가까이 걸림 | 무료 플랜이 잠들어 있던 것입니다. `scripts/warmup.py`로 미리 깨우세요. |
 | Windows에서 한글 깨짐 | `chcp 65001` 입력 후 다시 실행하세요. |
 | 휴대폰에 "홈 화면에 추가/설치"가 안 나옴 | HTTPS 주소인지, `python scripts/pwa_setup.py --check`가 "적용됨"인지 확인하세요. streamlit을 다시 설치했다면 `pwa_setup.py`를 다시 실행합니다. |
 | 새로고침하면 로그인이 풀림 | 30분 무동작·12시간 경과·비밀번호 변경 시에는 정상입니다. 브라우저가 쿠키를 막고 있지 않은지 확인하세요. |
 
-## 8. 설정 값
+## 9. 설정 값
 
 | 환경 변수 | 기본값 | 설명 |
 |---|---|---|
 | `LLM_API_KEY` | (필수) | Jitda LLM API 키 |
 | `LLM_BASE_URL` | (필수) | Jitda API 주소 (`/v1`로 끝나는 주소) |
 | `OFFICEGENIE_LLM_TIMEOUT` | `30` | LLM 응답 대기 시간(초) |
-| `DATABASE_URL` | (없으면 `./officegenie.db`) | PostgreSQL(Neon) 주소. 비밀 정보 |
+| `DATABASE_URL` | (없으면 `./officegenie.db`) | PostgreSQL(Neon) 주소. 비밀 정보. 운영 모드에서는 필수 |
+| `OFFICEGENIE_ENV` | (없음) | `production`이면 `DATABASE_URL` 필수(없거나 SQLite면 시작 실패) |
+| `OFFICEGENIE_MCP_PUBLIC_URL` | (없음) | 사원에게 안내할 원격 MCP 공개 주소(예: `https://officegenie-mcp.onrender.com`) |
 | `TEST_DATABASE_URL` | (선택) | 테스트 전용 DB(dev 브랜치) 주소. `DATABASE_URL`과 달라야 함 |
 | `OFFICEGENIE_SIGNUP_CODE` | (없음 = 누구나 등록) | 회사 등록에 필요한 서비스 가입 코드 |
 | `OFFICEGENIE_CACHE_TTL` | `60` | 관리자 반영 후 다른 서버 프로세스가 새 데이터를 확인하는 주기(초) |
 | `OFFICEGENIE_LOG_LEVEL` | `INFO` | `DEBUG`로 두면 툴 호출마다 DB 왕복 횟수를 기록 |
-| `OFFICEGENIE_PORT` | `8000` | 원격 MCP 서버 포트 |
-| `OFFICEGENIE_TOKENS` | `./tokens.json` | 원격 MCP 서버 토큰 파일 |
+| `PORT` / `OFFICEGENIE_PORT` | `8000` | 원격 MCP 서버 포트 (`PORT` 우선, Render가 지정) |
 
 ---
 

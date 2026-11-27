@@ -6,13 +6,15 @@
 - `mcp_server.py` — MCP 툴 (테크 리드). LLM용 6개(`get_my_tickets` 포함) + `ui_` 접두사 UI 전용(로그인·세션·등록·홈·공지·자료실·비품·티켓 확정·`ui_admin_*`)
 - `agent.py` — Jitda LLM API ↔ MCP 연결, 세션 값 주입 (테크 리드)
 - `app.py` — Streamlit UI (UI 담당). `agent.py`만 import한다. 메뉴형 화면, 현재 메뉴는 `?page=`와 동기화(신원·권한은 세션과 서버가 정함)
-- `storage.py` — DB 저장소 (SQLAlchemy Core, PostgreSQL(Neon)/SQLite). 서버의 모든 데이터 접근은 여기로만. 회사 코드·계정(`accounts`)·감사 로그(`audit_log`)도 여기
+- `storage.py` — DB 저장소 (SQLAlchemy Core, PostgreSQL(Neon)/SQLite). 서버의 모든 데이터 접근은 여기로만. 회사 코드·계정(`accounts`)·감사 로그(`audit_log`)·원격 MCP 토큰(`mcp_tokens`)도 여기
 - `company_data.py` — 회사 문서 5종 검증·업로드 해석·변경 비교 (파일·DB 접근 없음). import_company.py와 관리자 업로드가 같이 씀
 - `templates/` — 관리자 화면 업로드 양식 5종 (필드 설명 + 일반화한 예시 1건)
 - `scripts/import_company.py` — 회사 JSON 검증 → DB 가져오기, `--all`, `--reset-tickets`, `--reset-employee-passwords`, `--yes`. 회사 코드 출력
 - `scripts/list_companies.py`, `scripts/set_admin_password.py` — 운영자용 회사 코드 확인, ADMIN 비밀번호 설정
 - `data/<company_id>/` — policies, employees, locations, handovers, tickets (데이터·QA 담당). DB 가져오기 원본
 - `seed/` — 시연 초기화용 tickets.json 원본
+- `remote_server.py` — 원격 MCP 서버(HTTP). 요청마다 DB(`mcp_tokens`)로 토큰 검증, `PORT` 환경변수
+- `render.yaml`, `.python-version`, `scripts/preflight.py`, `scripts/warmup.py`, `scripts/deploy_check.py` — Render 배포(웹·MCP 2개 서비스 + Neon), 시작 전 점검, 깨우기, 배포 후 점검
 - `pwa/`, `scripts/pwa_setup.py`, `scripts/make_pwa_icons.py` — PWA 파일과 Streamlit 정적 폴더 주입(멱등, `--check`, `--undo`)
 - `docs/ui_contract.md` — app.py ↔ agent.py 규격. **반환 형식을 바꾸면 이 문서도 같이 고친다**
 
@@ -32,6 +34,8 @@
 11. 부서 전용 자료는 서버에서 부서를 확인한다(목록과 내려받기 모두). 화면에서 숨기는 것에 의존하지 않는다.
 12. 서비스 워커는 `/_stcore/`와 API 응답(페이지 응답 포함)을 저장하지 않는다. 미리 저장하는 것은 아이콘과 offline.html뿐이다.
 13. streamlit 버전을 바꾸면 `python scripts/pwa_setup.py`를 다시 실행하고 PWA 동작(manifest 응답, 서비스 워커 등록, 오프라인 화면)을 확인한다.
+14. 실행 중 로컬 파일에 데이터를 쓰지 않는다. 모든 상태는 DB에 저장한다. MCP 토큰은 해시만 저장한다.
+    `OFFICEGENIE_ENV=production`에서는 `DATABASE_URL`이 필수다(SQLite로 넘어가지 않는다).
 
 ## 확인 기준 (PRD)
 - 정상 1: bridgesoft/EMP001 "점심 식대 한도랑 내 남은 연차 며칠이야?" → 12,000원(복리후생 규정 제4조), 잔여 11일
@@ -50,6 +54,7 @@
 - 티켓 초기화: `python scripts/import_company.py --all --reset-tickets`
 - 시연용 사원 비밀번호 초기화(employees.json 값, ADMIN 제외): `python scripts/import_company.py --all --reset-employee-passwords`
 - 회사 코드 확인 / 관리자 비밀번호: `python scripts/list_companies.py`, `python scripts/set_admin_password.py <company_id>`
+- 배포 점검: `python scripts/warmup.py <웹주소> <MCP주소>`, `python scripts/deploy_check.py <웹주소> <MCP주소>`
 
 ## Jitda API 보안 및 호환 규칙
 - API 키는 서버의 `LLM_API_KEY`에서 읽고 브라우저로 전달하지 않는다.

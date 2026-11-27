@@ -11,10 +11,11 @@ flowchart LR
     UI -->|"chat.send()"| AG[에이전트<br/>agent.py]
     AG <-->|function calling| LLM[(Jitda<br/>LLM API)]
     AG <==>|MCP · stdio| SV[MCP 툴<br/>mcp_server.py]
-    A([🤖 AI 앱 사용자]) -->|"MCP · HTTP + 토큰"| RS[원격 서버<br/>remote_server.py]
+    A([🤖 AI 앱 사용자]) -->|"MCP · HTTP + 개인 토큰<br/>(사원이 홈에서 발급)"| RS[원격 서버<br/>remote_server.py]
     RS --> SV
     SV --> ST[저장소<br/>storage.py]
     ST --> DB[(PostgreSQL · Neon<br/>또는 로컬 SQLite)]
+    RS -.->|"요청마다 토큰 해시 확인<br/>mcp_tokens"| ST
     D[(data/회사별 JSON)] -.->|"가져오기<br/>scripts/import_company.py"| ST
     UP[/관리자 업로드 JSON<br/>메모리에서만 처리/] -.->|"ui_admin_preview/apply_upload<br/>company_data.py 검증"| SV
 ```
@@ -25,20 +26,55 @@ flowchart LR
 | 에이전트 | `agent.py` | LLM 툴 호출 루프, 세션 값 주입, 입력 검증, 장애 대응 |
 | MCP 툴 | `mcp_server.py` | LLM용 툴 6개 + UI 전용 `ui_` 툴(로그인·세션 · 등록 · 홈 · 공지 · 자료실 · 비품 · 관리자), 권한 · 비품 규칙 · 자료 형식 검증, 티켓 저장 |
 | 데이터 검증 | `company_data.py` | 문서 5종 검증 · 업로드 해석 · 변경 비교(파일·DB 접근 없음). CLI 가져오기와 관리자 업로드가 함께 사용 |
-| 원격 서버 | `remote_server.py` | HTTP MCP 엔드포인트, 토큰 인증, 안내 홈페이지 |
+| 원격 서버 | `remote_server.py` | HTTP MCP 엔드포인트, DB 토큰 검증기(요청마다 `mcp_tokens` 조회), 안내 홈페이지, `PORT` 환경변수 |
 | 저장소 | `storage.py` | SQLAlchemy Core로 DB 접근. 회사별 60초 캐시(`data_version` 확인), 티켓 발급 트랜잭션, 연결 재시도 |
 | DB | PostgreSQL(Neon) / SQLite | `DATABASE_URL`이 없으면 로컬 `officegenie.db` |
 | 가져오기 | `scripts/import_company.py` | JSON 검증 후 회사 단위로 DB 교체. 디스크의 JSON을 읽는 유일한 곳 |
-| 운영 스크립트 | `scripts/list_companies.py`, `scripts/set_admin_password.py` | 회사 코드 확인, ADMIN 비밀번호 설정 |
+| 운영 스크립트 | `scripts/list_companies.py`, `scripts/set_admin_password.py`, `scripts/issue_token.py` | 회사 코드 확인, ADMIN 비밀번호 설정, MCP 토큰 지원용 발급·폐기 |
+| 배포 | `render.yaml`, `.python-version`, `scripts/preflight.py`, `scripts/warmup.py`, `scripts/deploy_check.py` | Render Blueprint(서비스 2개), 시작 전 설정·PWA 점검, 잠든 서비스 깨우기, 배포 후 자동 점검 |
 | PWA | `pwa/`, `scripts/pwa_setup.py`, `scripts/make_pwa_icons.py` | manifest · 서비스 워커 · 오프라인 화면 · 아이콘, Streamlit 정적 폴더에 주입(멱등 · `--check` · `--undo`) |
 | 업로드 양식 | `templates/*.json` | 관리자 화면 "양식 다운로드" 파일(필드 설명 + 예시 1건) |
 | 원본 데이터 | `data/<company_id>/`, `seed/` | 회사별 표준 JSON 5종, 시연 초기화용 티켓 |
 
-서버는 실행 중에 JSON 파일을 읽거나 쓰지 않습니다(관리자가 올린 JSON은 메모리에서 검증·가져오기만 하고 파일로 저장하지 않음). 테이블은 `companies`(+`company_code`), `accounts`, `audit_log`, `login_sessions`, `resources`, `employees`(비밀번호 없음), `policies`, `search_config`, `locations`, `unregistered_places`, `handovers`, `equipment_rules`, `ticket_rules`, `tickets`, `announcements`이며 모두 `company_id`로 회사를 구분합니다. 새 테이블은 `init_db()`의 `create_all`이 기존 DB에 안전하게 추가합니다(기존 행은 건드리지 않음). 티켓 생성은 번호 할당 · 10초 중복 방지 · 수량 검사 · 저장 · 번호 증가를 트랜잭션 하나로 처리합니다(PostgreSQL은 회사 행 잠금, SQLite는 `BEGIN IMMEDIATE`). 그래서 웹 화면과 원격 서버가 동시에 신청해도 번호가 겹치지 않습니다.
+서버는 실행 중에 JSON 파일을 읽거나 쓰지 않습니다(관리자가 올린 JSON은 메모리에서 검증·가져오기만 하고 파일로 저장하지 않음). 테이블은 `companies`(+`company_code`), `accounts`, `audit_log`, `login_sessions`, `mcp_tokens`, `resources`, `employees`(비밀번호 없음), `policies`, `search_config`, `locations`, `unregistered_places`, `handovers`, `equipment_rules`, `ticket_rules`, `tickets`, `announcements`이며 모두 `company_id`로 회사를 구분합니다. 새 테이블은 `init_db()`의 `create_all`이 기존 DB에 안전하게 추가합니다(기존 행은 건드리지 않음). 티켓 생성은 번호 할당 · 10초 중복 방지 · 수량 검사 · 저장 · 번호 증가를 트랜잭션 하나로 처리합니다(PostgreSQL은 회사 행 잠금, SQLite는 `BEGIN IMMEDIATE`). 그래서 웹 화면과 원격 서버가 동시에 신청해도 번호가 겹치지 않습니다.
 
 웹 화면은 stdio 방식이라 `streamlit run app.py` 하나로 UI, 에이전트, MCP 툴이 함께 뜹니다. 원격 서버는 같은 툴 함수를 그대로 쓰고, 신원만 토큰에서 가져옵니다. 그래서 툴 동작을 고치면 두 입구에 똑같이 반영됩니다.
 
 UI 개발자용 연동 규격은 [ui_contract.md](ui_contract.md)에 있습니다.
+
+## ☁️ 배포 구조 (Render + Neon)
+
+```mermaid
+flowchart LR
+    B([👩‍💼 브라우저 · PWA]) -->|https| P1{{Render HTTPS 프록시}}
+    C([🤖 AI 앱]) -->|"https + Bearer og_…"| P2{{Render HTTPS 프록시}}
+    P1 -->|"http + X-Forwarded-Proto"| W["officegenie-web<br/>preflight.py → streamlit run app.py<br/>(app.py가 mcp_server.py를 stdio로 띄움)"]
+    P2 -->|"http + X-Forwarded-Proto"| M["officegenie-mcp<br/>remote_server.py (PORT, 0.0.0.0)"]
+    W --> N[(Neon PostgreSQL<br/>DATABASE_URL)]
+    M --> N
+```
+
+| 서비스 | 시작 | 헬스 체크 | 하는 일 |
+|---|---|---|---|
+| `officegenie-web` | `python scripts/preflight.py && streamlit run app.py --server.port $PORT …` | `/_stcore/health` | 웹 화면 · 챗봇(LLM 키는 이 서비스에만 필요) · 사원 토큰 발급 카드 |
+| `officegenie-mcp` | `python remote_server.py` | `/health` | AI 앱용 MCP 엔드포인트 `/mcp`와 안내 홈페이지 `/` |
+
+- 두 서비스는 상태를 갖지 않습니다. 무료 플랜은 재시작·잠들 때 디스크가 초기화되므로 회사 데이터, 계정, 로그인 세션,
+  티켓, 자료실 파일, MCP 토큰, 감사 로그를 모두 Neon에 저장합니다. 그래서 웹에서 발급한 토큰을 MCP 서버가 재시작 없이 바로 인정합니다.
+- 운영 모드(`OFFICEGENIE_ENV=production`)에서 `DATABASE_URL`이 없거나 SQLite이면 `preflight.py`·`remote_server.py`·`mcp_server.py`가
+  시작 단계에서 종료합니다.
+- HTTPS는 Render 프록시가 처리합니다. 앱은 `X-Forwarded-Proto`/`X-Forwarded-Host`로 로그인 쿠키 `Secure`와 MCP 안내 주소(https)를 정하고,
+  공개 주소는 `OFFICEGENIE_MCP_PUBLIC_URL`이 있으면 그것을 씁니다.
+- 무료 플랜은 15분 무요청 시 잠들고 깨는 데 최대 1분 걸립니다. `scripts/warmup.py`로 깨우고 `scripts/deploy_check.py`로 점검합니다.
+
+### `mcp_tokens` 표
+
+| 컬럼 | 내용 |
+|---|---|
+| `token_hash` (PK) | 토큰 원문의 SHA-256. 원문은 저장하지 않음. 화면·목록에는 앞 12자만 `token_id`로 씀 |
+| `company_id`, `employee_id` | 토큰 주인. 원격 툴의 신원은 이 값으로만 정해짐 |
+| `label` | 사원이 붙인 이름(최대 40자) |
+| `issued_at`, `last_used_at`, `revoked_at` | 발급·마지막 사용(1분에 한 번 갱신)·폐기 시각(UTC ISO). 폐기는 행을 지우지 않고 시각만 채움 |
 
 ## 🏢 멀티테넌트 구조
 
@@ -50,6 +86,7 @@ UI 개발자용 연동 규격은 [ui_contract.md](ui_contract.md)에 있습니�
 | `audit_log` | `id, company_id, at, actor, action, target, detail(JSON)`. 회사 등록, 가져오기·업로드 반영, 계정 동기화, 잠금, 비밀번호 변경·초기화, 티켓 상태 변경, 관리자 조회(같은 조회는 5분에 1번)를 기록. 비밀번호 값은 기록하지 않습니다. |
 | `tickets.history` | 관리자 상태 변경 이력 `[{at, by, from, to, note}]` |
 | `login_sessions` | `token_hash`(SHA-256, PK), `company_id`, `account_id`, `created_at`, `last_seen_at`, `expires_at`. 새로고침 후 로그인 유지용. 토큰 원문은 저장하지 않습니다. |
+| `mcp_tokens` | `token_hash`(SHA-256, PK), `company_id`, `employee_id`, `label`, `issued_at`, `last_used_at`, `revoked_at`. 원격 MCP 개인 토큰(1인 활성 최대 3개). 원문은 저장하지 않습니다. |
 | `resources` | `(company_id, resource_id)` PK. `title`, `category`, `description`, `kind`(file·link), `url`, `file_name`, `mime_type`, `size_bytes`, `content`(파일 바이트, 최대 5MB), `visibility`(all·department), `department`, `is_public`, `created_by`, `created_at`, `updated_at` |
 
 **로그인과 격리**
@@ -126,7 +163,9 @@ Streamlit은 앱 코드에서 `<head>`를 바꿀 수 없어서, 설치된 stream
 6. **에러가 화면을 깨지 않습니다.** 서버 연결 실패, LLM 장애, 응답 시간 초과(30초)는 안내 문구와 [다시 시도] 버튼으로 바뀌고, 파이썬 예외는 화면에 나오지 않습니다.
 7. **API 키는 MCP 서버로 넘어가지 않습니다.** LLM 키는 에이전트에만 있고, MCP 서버 프로세스 환경에서는 제거됩니다.
 8. **비밀번호는 해시로만 저장합니다.** 비밀번호·해시·솔트·DB 주소·API 키·가입 코드는 어떤 화면·로그·툴 응답에도 나오지 않습니다. 예외는 새로 만든 초기 비밀번호로, 반영·초기화 직후 관리자에게 한 번만 보여 주고 원문은 저장하지 않습니다.
-9. **회사 목록을 공개하지 않습니다.** 로그인 화면에 회사 드롭다운이 없고, 원격 서버의 홈페이지·`/health`도 회사 ID를 보여 주지 않습니다.
+9. **MCP 토큰은 해시만 저장합니다.** 사원이 홈에서 직접 발급(1인 최대 3개)하고, 원문은 발급 응답에서 한 번만 보입니다. `mcp_tokens`에는 SHA-256 해시·소유자·이름·발급/마지막 사용/폐기 시각만 있고, 원격 서버는 요청마다 DB를 확인해 폐기를 즉시 반영합니다. 잠금·비활성 계정의 토큰도 거부합니다. 발급·폐기는 감사 로그에 남습니다.
+10. **실행 중 로컬 파일에 데이터를 쓰지 않습니다.** 모든 상태는 DB에 있습니다. 운영 모드(`OFFICEGENIE_ENV=production`)에서 `DATABASE_URL`이 없거나 SQLite면 시작 단계에서 멈춥니다.
+11. **회사 목록을 공개하지 않습니다.** 로그인 화면에 회사 드롭다운이 없고, 원격 서버의 홈페이지·`/health`도 회사 ID를 보여 주지 않습니다.
 
 ## 🏢 다른 회사에 적용하기
 
@@ -183,8 +222,12 @@ officegenie/
 │   ├── pwa_setup.py       # Streamlit 정적 폴더에 PWA 적용 (--check, --undo)
 │   ├── make_pwa_icons.py  # PWA 아이콘 생성 (Pillow)
 │   ├── cli_chat.py        # 터미널 테스트 채팅
-│   └── issue_token.py     # 원격 서버 개인 토큰 발급 · 목록 · 폐기
-├── tests/                 # pytest 242개 (API 키 없이 실행, 임시 SQLite)
+│   ├── issue_token.py     # 원격 MCP 토큰 발급 · 목록 · 폐기 (운영자 지원용, DB 기준)
+│   ├── preflight.py       # 웹 시작 전 점검: 운영 모드 DB 필수, PWA 적용 경고
+│   ├── warmup.py          # 잠든 Render 서비스 깨우기, 응답 시간 표
+│   └── deploy_check.py    # 배포 후 자동 점검 + 수동 확인 목록
+├── render.yaml            # Render Blueprint (officegenie-web, officegenie-mcp)
+├── tests/                 # pytest (API 키 없이 실행, 임시 SQLite)
 └── requirements.txt
 ```
 
@@ -196,7 +239,7 @@ python -m pytest -q
 
 API 키 없이 실행됩니다. 운영 DB(`DATABASE_URL`)에는 절대 연결하지 않고 원본 `data/` · `seed/`는 바뀌지 않습니다.
 
-- **기준 상태**: DB 종류마다 세션당 한 번 `data/`를 가져오고 티켓을 seed로 초기화합니다. 테스트가 끝나면 티켓 · 공지 · 계정 · 감사 로그 · 로그인 세션 · 자료실과 테스트가 등록한 회사만 기준 상태로 되돌립니다.
+- **기준 상태**: DB 종류마다 세션당 한 번 `data/`를 가져오고 티켓을 seed로 초기화합니다. 테스트가 끝나면 티켓 · 공지 · 계정 · 감사 로그 · 로그인 세션 · 자료실 · MCP 토큰과 테스트가 등록한 회사만 기준 상태로 되돌립니다.
 - **브라우저 테스트**(`test_browser_*.py`): Playwright가 없으면 건너뜁니다(개발용, requirements.txt에는 없음). PWA 확인은 `pwa_setup.py --check`가 통과할 때만 돌립니다.
 - **`@pytest.mark.reimport`**: 회사 정적 데이터를 바꾸는 테스트(가져오기 · 업로드 · 규정 삭제). 끝난 뒤 테이블을 다시 만들고 다시 가져옵니다. 표시 없이 정적 데이터(`data_version`)를 바꾸면 그 테스트가 오류로 표시됩니다.
 - **`@pytest.mark.pg`**: DB 종류에 따라 결과가 달라질 수 있는 테스트(스키마 생성 · 추가, 가져오기 트랜잭션과 롤백, 티켓 동시 발급 번호, 회사 코드 유니크, 로그인 잠금, 연결 재시도 · URL 마스킹). `TEST_DATABASE_URL`이 있으면 이 테스트만 PostgreSQL 임시 스키마에서 한 번 더 돌립니다. 전부 돌리려면 `pytest --pg-all`.
@@ -213,7 +256,11 @@ python -m pytest -q --pg-all                         # PostgreSQL에서도 전�
 | `test_tools.py` | 28 | 규정 검색, 장소, 인수인계서, 권한 차단, 비품 화이트리스트 · 수량 한도, 다기업 |
 | `test_agent.py` | 14 | 실제 MCP 서버 + 가짜 LLM: 사번 위조 무시, 확인 절차, 입력 검증, 장애 대응, LLM에 보이는 툴 6개 |
 | `test_jitda_llm.py` | 5 | Jitda API 연동 형식, 키 비노출 (외부 요청 없음) |
-| `test_remote.py` | 5 | 원격 서버: 잘못된 토큰 거부, 토큰별 신원 분리, 2단계 신청과 get_my_tickets, 웹·원격 동시 발급 번호 중복 없음 |
+| `test_remote.py` | 8 | 원격 서버(DB 토큰): 잘못된 토큰 거부, 토큰별 신원 분리, 실행 중 발급·폐기 즉시 반영, tokens.json 미사용, 프록시 헤더 https 주소, 2단계 신청, 웹·원격 동시 발급 번호 중복 없음 |
+| `test_mcp_tokens.py` | 12 | 발급한 토큰만 통과, 폐기 즉시 거부, DB에 원문 없음, 1인 3개 제한, 다른 사원 토큰 폐기 불가, 비활성 계정 거부, 감사 로그, 운영 모드 DATABASE_URL 없으면 시작 실패, preflight PWA 경고 |
+| `test_mcp_connect.py` | 9 | AI 앱 연결 카드: 발급 원문 한 번만·폐기, 안내 명령에 공개 MCP 주소, 관리자 현황·강제 폐기(같은 회사만), 미리보기에서 발급·폐기 불가, LLM 툴 아님 |
+| `test_proxy.py` | 5 | 프록시 헤더(X-Forwarded-Proto)가 https면 로그인 쿠키 Secure, render.yaml 규격, config.toml 배포 설정, PORT 환경변수 |
+| `test_deploy_tools.py` | 4 | 로컬 웹·MCP 서버에 warmup.py·deploy_check.py 실행(PWA 파일, /health, 잘못된 토큰 401, http 경고·실패) |
 | `test_storage.py` | 24 | DB 가져오기 · 재가져오기 티켓 유지 · 롤백 · 캐시 · 동시 발급 · 로그에 주소 미노출 |
 | `test_accounts.py` | 22 | 회사 코드, 로그인 동일 문구·5회 잠금, 해시 저장, 초기 비밀번호, 응답에 비밀번호 없음, LLM 툴 목록 |
 | `test_register.py` | 7 | 회사 등록·가입 코드·ADMIN 로그인, 빈 회사 처리, 관리자 권한 |

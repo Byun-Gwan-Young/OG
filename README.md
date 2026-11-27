@@ -68,7 +68,16 @@ streamlit run app.py                                 # 회사 코드 + EMP001 + 
 
 새 회사는 첫 화면의 **회사 등록**으로 만들고, 관리자 화면에서 데이터를 올리면 됩니다. 시연 회사의 관리자 계정은 `python scripts/set_admin_password.py bridgesoft`로 만듭니다.
 
-자세한 설치, MCP 서버 실행, 토큰 발급, 문제 해결은 [관리자 가이드](docs/guide-admin.md)를 보세요.
+**배포 주소** (Render, [배포 방법](docs/guide-admin.md#6-render-배포하기))
+
+| 서비스 | 주소 |
+|---|---|
+| 웹 | `https://<officegenie-web 주소>.onrender.com` |
+| AI 앱 연결(MCP) | `https://<officegenie-mcp 주소>.onrender.com/mcp` — 토큰은 웹 홈의 **AI 앱 연결** 카드에서 발급 |
+
+무료 플랜은 한동안 접속이 없으면 잠들어 첫 로딩에 최대 1분 걸립니다. 시연 전에는 `python scripts/warmup.py <웹 주소> <MCP 주소>`로 깨워 두세요.
+
+자세한 설치, Render 배포, MCP 서버, 문제 해결은 [관리자 가이드](docs/guide-admin.md)를 보세요.
 
 ## 📚 문서
 
