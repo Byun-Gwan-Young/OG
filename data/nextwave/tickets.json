@@ -1,7 +1,7 @@
 {
   "company_id": "nextwave",
   "company_name": "(주)넥스트웨이브",
-  "data_version": "demo-1.5",
+  "data_version": "1.8-nextwave-consistency",
   "ticket_id_format": "REQ-{sequence:03d}",
   "next_sequence": 4,
   "status_values": [

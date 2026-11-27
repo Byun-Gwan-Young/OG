@@ -1,0 +1,775 @@
+{
+  "company_id": "evergrid",
+  "company_name": "(주)에버그리드",
+  "data_version": "1.9-evergrid-consistency",
+  "notice": "모든 직원·4자리 비밀번호·연차는 OfficeGenie 시연용 가상 데이터입니다. 법정 연차의 정확한 산정에는 근속기간·출근율이 필요합니다. 비밀번호는 운영 서비스에서 평문으로 보관하지 않습니다.",
+  "employees": [
+    {
+      "employee_id": "EMP001",
+      "password": "4137",
+      "name": "김하온",
+      "department": "백엔드개발팀",
+      "job_title": "주니어 백엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 4,
+        "remaining_days": 11,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 1,
+      "work_email": "emp001@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP002",
+      "password": "2756",
+      "name": "이서준",
+      "department": "백엔드개발팀",
+      "job_title": "백엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 5,
+        "remaining_days": 12,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 2,
+      "work_email": "emp002@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP003",
+      "password": "7457",
+      "name": "박다윤",
+      "department": "백엔드개발팀",
+      "job_title": "API 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 5,
+        "remaining_days": 14,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp003@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP004",
+      "password": "9154",
+      "name": "최민재",
+      "department": "백엔드개발팀",
+      "job_title": "플랫폼 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 12,
+        "remaining_days": 7,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp004@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP005",
+      "password": "5917",
+      "name": "정수아",
+      "department": "백엔드개발팀",
+      "job_title": "선임 백엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 21,
+        "used_days": 4,
+        "remaining_days": 17,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp005@evergrid.co.kr",
+      "position": "과장"
+    },
+    {
+      "employee_id": "EMP006",
+      "password": "2120",
+      "name": "한도윤",
+      "department": "백엔드개발팀",
+      "job_title": "백엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 0,
+        "remaining_days": 15,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp006@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP007",
+      "password": "9810",
+      "name": "윤서아",
+      "department": "백엔드개발팀",
+      "job_title": "API 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 3,
+        "remaining_days": 14,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp007@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP008",
+      "password": "7227",
+      "name": "강준혁",
+      "department": "백엔드개발팀",
+      "job_title": "플랫폼 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 10,
+        "remaining_days": 9,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp008@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP009",
+      "password": "6763",
+      "name": "오하린",
+      "department": "백엔드개발팀",
+      "job_title": "백엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 2,
+        "remaining_days": 17,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp009@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP010",
+      "password": "3731",
+      "name": "조태영",
+      "department": "백엔드개발팀",
+      "job_title": "백엔드 개발팀장",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 24,
+        "used_days": 4,
+        "remaining_days": 20,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp010@evergrid.co.kr",
+      "position": "차장"
+    },
+    {
+      "employee_id": "EMP011",
+      "password": "1448",
+      "name": "서채원",
+      "department": "프론트엔드개발팀",
+      "job_title": "주니어 프론트엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 0,
+        "remaining_days": 15,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 2,
+      "work_email": "emp011@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP012",
+      "password": "6805",
+      "name": "임현우",
+      "department": "프론트엔드개발팀",
+      "job_title": "UI 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 11,
+        "remaining_days": 6,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp012@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP013",
+      "password": "5350",
+      "name": "장유진",
+      "department": "프론트엔드개발팀",
+      "job_title": "프론트엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 0,
+        "remaining_days": 19,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp013@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP014",
+      "password": "7248",
+      "name": "배도현",
+      "department": "프론트엔드개발팀",
+      "job_title": "웹 퍼블리셔",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 2,
+        "remaining_days": 17,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp014@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP015",
+      "password": "6889",
+      "name": "신하은",
+      "department": "프론트엔드개발팀",
+      "job_title": "선임 프론트엔드 개발자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 21,
+        "used_days": 2,
+        "remaining_days": 19,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp015@evergrid.co.kr",
+      "position": "과장"
+    },
+    {
+      "employee_id": "EMP016",
+      "password": "2933",
+      "name": "송지훈",
+      "department": "프론트엔드개발팀",
+      "job_title": "프론트엔드 개발팀장",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 21,
+        "used_days": 12,
+        "remaining_days": 9,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp016@evergrid.co.kr",
+      "position": "과장"
+    },
+    {
+      "employee_id": "EMP017",
+      "password": "7693",
+      "name": "유지민",
+      "department": "서비스기획팀",
+      "job_title": "서비스 기획자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 12,
+        "remaining_days": 3,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 2,
+      "work_email": "emp017@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP018",
+      "password": "1719",
+      "name": "남예린",
+      "department": "서비스기획팀",
+      "job_title": "프로덕트 매니저",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 7,
+        "remaining_days": 10,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp018@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP019",
+      "password": "1537",
+      "name": "홍시우",
+      "department": "서비스기획팀",
+      "job_title": "서비스 운영 기획자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 6,
+        "remaining_days": 13,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp019@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP020",
+      "password": "9603",
+      "name": "백지우",
+      "department": "서비스기획팀",
+      "job_title": "데이터 기획자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 6,
+        "remaining_days": 13,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp020@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP021",
+      "password": "2363",
+      "name": "문준서",
+      "department": "서비스기획팀",
+      "job_title": "서비스 기획자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 21,
+        "used_days": 8,
+        "remaining_days": 13,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp021@evergrid.co.kr",
+      "position": "과장"
+    },
+    {
+      "employee_id": "EMP022",
+      "password": "2200",
+      "name": "권서진",
+      "department": "서비스기획팀",
+      "job_title": "서비스 기획팀장",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 24,
+        "used_days": 3,
+        "remaining_days": 21,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp022@evergrid.co.kr",
+      "position": "차장"
+    },
+    {
+      "employee_id": "EMP023",
+      "password": "8350",
+      "name": "노지호",
+      "department": "디자인팀",
+      "job_title": "프로덕트 디자이너",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 0,
+        "remaining_days": 15,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 2,
+      "work_email": "emp023@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP024",
+      "password": "9464",
+      "name": "허나은",
+      "department": "디자인팀",
+      "job_title": "UX 디자이너",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 8,
+        "remaining_days": 9,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp024@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP025",
+      "password": "9290",
+      "name": "전민서",
+      "department": "디자인팀",
+      "job_title": "UI 디자이너",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 12,
+        "remaining_days": 7,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp025@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP026",
+      "password": "9443",
+      "name": "안재윤",
+      "department": "디자인팀",
+      "job_title": "디자인팀장",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 21,
+        "used_days": 3,
+        "remaining_days": 18,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp026@evergrid.co.kr",
+      "position": "과장"
+    },
+    {
+      "employee_id": "EMP027",
+      "password": "7152",
+      "name": "진소연",
+      "department": "인사총무팀",
+      "job_title": "인사 운영 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 2,
+        "remaining_days": 13,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 2,
+      "work_email": "emp027@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP028",
+      "password": "6578",
+      "name": "황태민",
+      "department": "인사총무팀",
+      "job_title": "채용 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 12,
+        "remaining_days": 5,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp028@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP029",
+      "password": "1926",
+      "name": "차하영",
+      "department": "인사총무팀",
+      "job_title": "총무 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 0,
+        "remaining_days": 19,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp029@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP030",
+      "password": "3300",
+      "name": "류도윤",
+      "department": "인사총무팀",
+      "job_title": "인사총무 팀장",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 21,
+        "used_days": 4,
+        "remaining_days": 17,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp030@evergrid.co.kr",
+      "position": "과장"
+    },
+    {
+      "employee_id": "EMP031",
+      "password": "3959",
+      "name": "고은서",
+      "department": "재무회계팀",
+      "job_title": "회계 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 5,
+        "remaining_days": 10,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 2,
+      "work_email": "emp031@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP032",
+      "password": "1771",
+      "name": "도현서",
+      "department": "재무회계팀",
+      "job_title": "경영관리 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 0,
+        "remaining_days": 17,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp032@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP033",
+      "password": "3346",
+      "name": "하주원",
+      "department": "재무회계팀",
+      "job_title": "재무 분석 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 2,
+        "remaining_days": 17,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp033@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP034",
+      "password": "3088",
+      "name": "표서율",
+      "department": "재무회계팀",
+      "job_title": "원가 관리 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 4,
+        "remaining_days": 15,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp034@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP035",
+      "password": "2482",
+      "name": "마유찬",
+      "department": "재무회계팀",
+      "job_title": "재무회계 팀장",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 24,
+        "used_days": 4,
+        "remaining_days": 20,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp035@evergrid.co.kr",
+      "position": "차장"
+    },
+    {
+      "employee_id": "EMP036",
+      "password": "4673",
+      "name": "엄채린",
+      "department": "QA팀",
+      "job_title": "QA 엔지니어",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 15,
+        "used_days": 8,
+        "remaining_days": 7,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": 2,
+      "work_email": "emp036@evergrid.co.kr",
+      "position": "사원"
+    },
+    {
+      "employee_id": "EMP037",
+      "password": "9973",
+      "name": "나시온",
+      "department": "QA팀",
+      "job_title": "테스트 자동화 엔지니어",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 17,
+        "used_days": 11,
+        "remaining_days": 6,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp037@evergrid.co.kr",
+      "position": "주임"
+    },
+    {
+      "employee_id": "EMP038",
+      "password": "0508",
+      "name": "양세린",
+      "department": "QA팀",
+      "job_title": "품질관리 담당자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 7,
+        "remaining_days": 12,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp038@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP039",
+      "password": "6388",
+      "name": "봉지환",
+      "department": "QA팀",
+      "job_title": "QA 테스트 설계자",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 19,
+        "used_days": 8,
+        "remaining_days": 11,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp039@evergrid.co.kr",
+      "position": "대리"
+    },
+    {
+      "employee_id": "EMP040",
+      "password": "1908",
+      "name": "심가은",
+      "department": "QA팀",
+      "job_title": "QA팀장",
+      "employment_status": "재직",
+      "annual_leave": {
+        "unit": "일",
+        "granted_days": 21,
+        "used_days": 12,
+        "remaining_days": 9,
+        "as_of": "2026-11-27",
+        "note": "시연용: 직급별 사내 최저 지급 기준에 따른 연차이며 법정 발생분의 정확한 검증은 별도 필요."
+      },
+      "onboarding_week": null,
+      "work_email": "emp040@evergrid.co.kr",
+      "position": "과장"
+    }
+  ],
+  "access_rule": {
+    "employee_info": "본인 정보만 열람 가능(가상 사번 데모 모드에서는 선택된 사번에 한정)",
+    "employee_id_source": "서버의 인증 세션 또는 데모용 선택값. LLM이 요청에서 임의 지정한 사번 사용 금지",
+    "other_employee_info": "deny",
+    "department_handover": "자기 소속 부서만 열람 가능"
+  },
+  "employee_count": 40
+}

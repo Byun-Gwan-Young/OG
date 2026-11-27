@@ -1,7 +1,7 @@
 {
   "company_id": "nextwave",
   "company_name": "(주)넥스트웨이브",
-  "data_version": "1.7-position-annual-leave",
+  "data_version": "1.8-nextwave-consistency",
   "notice": "프로젝트 시연용 데이터: 직급별 연차 기준과 기존 부여 일수를 비교해 annual_leave로 통합. 실제 법정 연차의 정확한 검증은 근속기간 및 출근율 데이터가 필요함.",
   "access_rule": {
     "employee_info": "본인 정보만 열람 가능(가상 사번 데모 모드에서는 선택된 사번에 한정)",

@@ -1,0 +1,352 @@
+{
+  "company_id": "evergrid",
+  "company_name": "(주)에버그리드",
+  "data_version": "1.9-evergrid-consistency",
+  "buildings": [
+    {
+      "name": "넥서스센터",
+      "total_floors": 5,
+      "floors": [
+        {
+          "floor": 1,
+          "location_ids": [
+            "LOC-001",
+            "LOC-002",
+            "LOC-003"
+          ]
+        },
+        {
+          "floor": 2,
+          "location_ids": [
+            "LOC-004",
+            "LOC-005",
+            "LOC-006"
+          ]
+        },
+        {
+          "floor": 3,
+          "location_ids": [
+            "LOC-007",
+            "LOC-008",
+            "LOC-009"
+          ]
+        },
+        {
+          "floor": 4,
+          "location_ids": [
+            "LOC-010",
+            "LOC-011",
+            "LOC-012"
+          ]
+        },
+        {
+          "floor": 5,
+          "location_ids": [
+            "LOC-013",
+            "LOC-014"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "이노베이션동",
+      "total_floors": 2,
+      "floors": [
+        {
+          "floor": 1,
+          "location_ids": [
+            "LOC-015",
+            "LOC-016"
+          ]
+        },
+        {
+          "floor": 2,
+          "location_ids": [
+            "LOC-017",
+            "LOC-018",
+            "LOC-019",
+            "LOC-020"
+          ]
+        }
+      ]
+    }
+  ],
+  "locations": [
+    {
+      "location_id": "LOC-001",
+      "name": "웰컴라운지",
+      "aliases": [
+        "안내데스크",
+        "로비",
+        "방문객 안내"
+      ],
+      "building": "넥서스센터",
+      "floor": 1,
+      "zone": "A구역",
+      "guide": "넥서스센터 1층 A구역에 있습니다. 방문객 출입 등록과 신입사원 방문 안내를 지원합니다.",
+      "access": "전 직원 및 방문객"
+    },
+    {
+      "location_id": "LOC-002",
+      "name": "사원카드 발급창구",
+      "aliases": [
+        "출입증",
+        "사원증 발급"
+      ],
+      "building": "넥서스센터",
+      "floor": 1,
+      "zone": "B구역",
+      "guide": "넥서스센터 1층 B구역에 있습니다. 신규 출입카드를 발급받고 출입 권한을 확인합니다.",
+      "access": "전 직원"
+    },
+    {
+      "location_id": "LOC-003",
+      "name": "카페테리아",
+      "aliases": [
+        "카페",
+        "구내 휴게공간"
+      ],
+      "building": "넥서스센터",
+      "floor": 1,
+      "zone": "C구역",
+      "guide": "넥서스센터 1층 C구역에 있습니다. 식사와 휴식이 가능한 공용 공간입니다.",
+      "access": "전 직원",
+      "capacity": 26
+    },
+    {
+      "location_id": "LOC-004",
+      "name": "인사총무팀",
+      "aliases": [
+        "인사팀",
+        "HR",
+        "총무팀"
+      ],
+      "building": "넥서스센터",
+      "floor": 2,
+      "zone": "A구역",
+      "guide": "넥서스센터 2층 A구역에 있습니다. 입사 서류 및 근태 문의를 상담하는 인사총무 사무구역입니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-005",
+      "name": "재무회계팀",
+      "aliases": [
+        "회계팀",
+        "재무팀"
+      ],
+      "building": "넥서스센터",
+      "floor": 2,
+      "zone": "B구역",
+      "guide": "넥서스센터 2층 B구역에 있습니다. 경비 정산 및 법인카드 관련 문의는 사전 예약 후 방문합니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-006",
+      "name": "공용 복합기",
+      "aliases": [
+        "복합기",
+        "프린터",
+        "출력실"
+      ],
+      "building": "넥서스센터",
+      "floor": 2,
+      "zone": "C구역",
+      "guide": "넥서스센터 2층 C구역에 있습니다. 문서 출력과 스캔을 할 수 있는 공용 복합기 구역입니다.",
+      "access": "전 직원"
+    },
+    {
+      "location_id": "LOC-007",
+      "name": "백엔드개발팀",
+      "aliases": [
+        "백엔드팀",
+        "서버 개발팀"
+      ],
+      "building": "넥서스센터",
+      "floor": 3,
+      "zone": "A구역",
+      "guide": "넥서스센터 3층 A구역에 있습니다. 사내 플랫폼 API 및 데이터 서비스 개발 담당 부서입니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-008",
+      "name": "프론트엔드개발팀",
+      "aliases": [
+        "프론트엔드팀",
+        "웹 개발팀"
+      ],
+      "building": "넥서스센터",
+      "floor": 3,
+      "zone": "B구역",
+      "guide": "넥서스센터 3층 B구역에 있습니다. 웹 클라이언트 및 사용자 인터페이스 개발 부서입니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-009",
+      "name": "협업 회의실",
+      "aliases": [
+        "중회의실",
+        "협업실"
+      ],
+      "building": "넥서스센터",
+      "floor": 3,
+      "zone": "C구역",
+      "guide": "넥서스센터 3층 C구역에 있습니다. 팀 간 설계 검토 및 실무 미팅용 공간입니다.",
+      "access": "전 직원",
+      "capacity": 8
+    },
+    {
+      "location_id": "LOC-010",
+      "name": "서비스기획팀",
+      "aliases": [
+        "기획팀",
+        "PM팀"
+      ],
+      "building": "넥서스센터",
+      "floor": 4,
+      "zone": "A구역",
+      "guide": "넥서스센터 4층 A구역에 있습니다. 서비스 로드맵 및 요구사항을 관리하는 부서입니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-011",
+      "name": "디자인팀",
+      "aliases": [
+        "UX팀",
+        "UI팀",
+        "디자인실"
+      ],
+      "building": "넥서스센터",
+      "floor": 4,
+      "zone": "B구역",
+      "guide": "넥서스센터 4층 B구역에 있습니다. 서비스 디자인 및 사용자 경험을 연구하는 부서입니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-012",
+      "name": "아이디어룸",
+      "aliases": [
+        "소회의실",
+        "브레인스토밍룸"
+      ],
+      "building": "넥서스센터",
+      "floor": 4,
+      "zone": "C구역",
+      "guide": "넥서스센터 4층 C구역에 있습니다. 아이디어 회의 및 소규모 리뷰용 공간입니다.",
+      "access": "전 직원",
+      "capacity": 5
+    },
+    {
+      "location_id": "LOC-013",
+      "name": "대회의실",
+      "aliases": [
+        "회의실 A",
+        "큰 회의실",
+        "전사 회의실"
+      ],
+      "building": "넥서스센터",
+      "floor": 5,
+      "zone": "A구역",
+      "guide": "넥서스센터 5층 A구역에 있습니다. 전사 발표 및 대형 회의에 사용하며 예약 후 입장합니다.",
+      "access": "전 직원",
+      "capacity": 14
+    },
+    {
+      "location_id": "LOC-014",
+      "name": "타운홀",
+      "aliases": [
+        "행사홀",
+        "설명회장"
+      ],
+      "building": "넥서스센터",
+      "floor": 5,
+      "zone": "B구역",
+      "guide": "넥서스센터 5층 B구역에 있습니다. 회사 행사, 신규 입사자 오리엔테이션 및 발표에 이용합니다.",
+      "access": "전 직원",
+      "capacity": 48
+    },
+    {
+      "location_id": "LOC-015",
+      "name": "비품 수령실",
+      "aliases": [
+        "비품창고",
+        "장비 수령"
+      ],
+      "building": "이노베이션동",
+      "floor": 1,
+      "zone": "A구역",
+      "guide": "이노베이션동 1층 A구역에 있습니다. 승인된 노트북·모니터 등의 비품을 수령하는 곳입니다.",
+      "access": "담당 직원 및 승인된 수령자"
+    },
+    {
+      "location_id": "LOC-016",
+      "name": "직원 휴게실",
+      "aliases": [
+        "휴게실",
+        "탕비실"
+      ],
+      "building": "이노베이션동",
+      "floor": 1,
+      "zone": "B구역",
+      "guide": "이노베이션동 1층 B구역에 있습니다. 업무 중 휴식을 위한 공용 공간입니다.",
+      "access": "전 직원"
+    },
+    {
+      "location_id": "LOC-017",
+      "name": "QA팀",
+      "aliases": [
+        "QA",
+        "품질관리팀"
+      ],
+      "building": "이노베이션동",
+      "floor": 2,
+      "zone": "A구역",
+      "guide": "이노베이션동 2층 A구역에 있습니다. 서비스 품질 검증 및 테스트 관리 부서입니다.",
+      "access": "담당 직원 및 승인된 방문자"
+    },
+    {
+      "location_id": "LOC-018",
+      "name": "기기 테스트랩",
+      "aliases": [
+        "테스트실",
+        "테스트 랩"
+      ],
+      "building": "이노베이션동",
+      "floor": 2,
+      "zone": "B구역",
+      "guide": "이노베이션동 2층 B구역에 있습니다. 서비스 호환성 시험 장비를 관리하며 사용 전 승인을 받아야 합니다.",
+      "access": "담당 직원만"
+    },
+    {
+      "location_id": "LOC-019",
+      "name": "온보딩 교육실",
+      "aliases": [
+        "교육실",
+        "신입 교육실"
+      ],
+      "building": "이노베이션동",
+      "floor": 2,
+      "zone": "C구역",
+      "guide": "이노베이션동 2층 C구역에 있습니다. 신규 입사자 계정·보안·협업 교육이 진행됩니다.",
+      "access": "전 직원",
+      "capacity": 18
+    },
+    {
+      "location_id": "LOC-020",
+      "name": "화상회의실",
+      "aliases": [
+        "영상회의실",
+        "원격 회의실"
+      ],
+      "building": "이노베이션동",
+      "floor": 2,
+      "zone": "D구역",
+      "guide": "이노베이션동 2층 D구역에 있습니다. 원격 고객 미팅을 위한 영상회의실입니다.",
+      "access": "전 직원",
+      "capacity": 6
+    }
+  ],
+  "explicitly_not_registered": [
+    "사내 수면실",
+    "대표 개인 연락처"
+  ]
+}
