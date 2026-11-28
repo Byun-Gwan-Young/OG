@@ -156,7 +156,6 @@ def _new_chat_state(company_id: str, employee_id: str, is_open: bool) -> None:
     st.session_state.chat_error = False
     st.session_state.chat_last_question = ""
     st.session_state.chat_pending_ticket = None
-    st.session_state.chat_input = ""
 
 
 def _toggle_chat_panel(company_id: str, employee_id: str) -> None:
@@ -192,10 +191,8 @@ def _send_suggestion(question: str) -> None:
     _start_send(question)
 
 
-def _send_form_message(input_key: str) -> None:
-    question = str(st.session_state.get(input_key, ""))
-    st.session_state[input_key] = ""
-    _start_send(question)
+def _send_chat_message() -> None:
+    _start_send(st.session_state.chat_input)
 
 
 def _retry_last_question() -> None:
@@ -635,46 +632,12 @@ def _render_chat_panel(company_id: str, employee_id: str) -> None:
             _render_pending_ticket()
 
         with st.container(key="chat_footer"):
-            with st.form(
-                key="chat_send_form",
-                clear_on_submit=False,
-                border=False,
-                enter_to_submit=True,
-            ):
-                with st.container(
-                    horizontal=True,
-                    wrap=False,
-                    gap="small",
-                    vertical_alignment="center",
-                    key="chat_input_row",
-                ):
-                    st.text_input(
-                        "메시지",
-                        placeholder="궁금한 점을 입력해 주세요",
-                        max_chars=500,
-                        key="chat_input",
-                        label_visibility="collapsed",
-                        disabled=st.session_state.get("chat_pending", False),
-                        width="stretch",
-                    )
-                    st.form_submit_button(
-                        "전송",
-                        key="chat_send_button",
-                        icon=":material/arrow_upward:",
-                        width="content",
-                        disabled=st.session_state.get("chat_pending", False),
-                        on_click=_send_form_message,
-                        args=("chat_input",),
-                    )
-            st.markdown(
-                "<div class='chat-char-count'>"
-                f"{len(str(st.session_state.get('chat_input', '') or ''))}/500"
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                "<div class='chat-reset-note'>창을 닫으면 대화가 초기화됩니다.</div>",
-                unsafe_allow_html=True,
+            st.chat_input(
+                "궁금한 점을 입력해 주세요",
+                max_chars=500,
+                key="chat_input",
+                disabled=st.session_state.get("chat_pending", False),
+                on_submit=_send_chat_message,
             )
 
 
@@ -1701,87 +1664,55 @@ def _render_styles() -> None:
             border-top: 1px solid #E2E7EE !important;
             background: #fff !important;
         }
-        .st-key-chat_footer [data-testid="stForm"] {
-            width: 100% !important;
-            box-sizing: border-box !important;
-            margin: 0 !important;
-            padding: 4px !important;
+        .st-key-chat_footer [data-testid="stChatInput"] {
+            /* 글자 수는 입력창 아래에 표시한다. */
+            margin-bottom: 18px;
+        }
+        .st-key-chat_footer [data-testid="stChatInput"] > div {
+            position: static;
+            padding: 5px !important;
             border: 1px solid #DCE5F4 !important;
             border-radius: 13px !important;
             background: #F7F9FC !important;
         }
-        .st-key-chat_footer [data-testid="stForm"] [data-testid="stHorizontalBlock"] { gap: 7px !important; align-items: center; }
-        .st-key-chat_footer .st-key-chat_input_row [data-testid="stTextInput"] { flex: 1 1 0 !important; min-width: 0 !important; }
-        .st-key-chat_footer [data-testid="stTextInput"] { margin: 0 !important; }
-        .st-key-chat_footer .st-key-chat_input_row {
-            padding-bottom: 19px !important;
-        }
-        .st-key-chat_footer [data-testid="stTextInput"] div:has(> [data-testid="InputInstructions"]) {
-            top: calc(100% + 2px) !important;
-            right: 0 !important;
-            bottom: auto !important;
-            left: 0 !important;
-            width: 100% !important;
-            height: 16px !important;
-        }
-        .st-key-chat_footer [data-testid="InputInstructions"] {
-            position: static !important;
-            display: flex !important;
+        .st-key-chat_footer [data-testid="stChatInput"] > div > div {
+            flex-flow: row nowrap !important;
             align-items: center !important;
-            justify-content: flex-end !important;
-            width: 100% !important;
-            height: 16px !important;
-            margin: 0 !important;
-            padding: 0 43px 0 0 !important;
-            box-sizing: border-box !important;
-            color: #77859A !important;
-            pointer-events: none !important;
+            gap: 7px !important;
         }
-        .st-key-chat_footer [data-testid="InputInstructions"] span:not(:last-child) {
-            display: none !important;
+        .st-key-chat_footer [data-testid="stChatInput"] div:has(> textarea) {
+            flex: 1 1 0 !important;
+            min-width: 0;
+            order: -1;
         }
-        .st-key-chat_footer [data-testid="InputInstructions"] span:last-child {
-            color: #77859A !important;
-            font-size: 11px !important;
-            line-height: 16px !important;
-            white-space: nowrap !important;
+        .st-key-chat_footer [data-testid="stChatInput"] > div > div > div:has(button) {
+            width: auto;
+            flex: 0 0 auto;
+            gap: 0;
         }
-        .st-key-chat_footer .chat-char-count {
-            box-sizing: border-box;
-            height: 16px;
-            margin-top: 2px;
-            padding-right: 48px;
+        .st-key-chat_footer #stChatInputInstructions {
+            position: absolute;
+            inset-block-start: calc(100% + 2px);
+            inset-inline-end: 0;
             color: #77859A;
             font-size: 11px;
             line-height: 16px;
             text-align: right;
         }
-        .st-key-chat_footer:has([data-testid="InputInstructions"]) .chat-char-count {
-            visibility: hidden;
-        }
-        .st-key-chat_footer [data-testid="stTextInput"] div,
-        .st-key-chat_footer [data-testid="stTextInput"] input,
-        .st-key-chat_footer [data-testid="stTextInput"] input:focus {
-            border: 0 !important;
-            outline: 0 !important;
-            box-shadow: none !important;
-            background: transparent !important;
-        }
-        .st-key-chat_footer [data-testid="stTextInput"] input {
-            min-height: 37px !important;
+        .st-key-chat_footer [data-testid="InputInstructions"]:empty::after { content: "0/500"; }
+        .st-key-chat_footer [data-testid="stChatInputTextArea"] {
+            min-height: 18px !important;
             padding: 0 9px !important;
             color: #34445B !important;
             font-size: 12px !important;
+            line-height: 18px !important;
+            text-align: left;
         }
-        .st-key-chat_footer [data-testid="stTextInput"] input::placeholder { color: #8D9EB5 !important; opacity: 1; }
-        .st-key-chat_footer [data-testid="stForm"] [data-testid="stFormSubmitButton"] button,
-        .st-key-chat_footer [data-testid="stForm"] button[kind="secondary"] {
-            position: relative;
+        .st-key-chat_footer [data-testid="stChatInputTextArea"]::placeholder { color: #8D9EB5 !important; opacity: 1; }
+        .st-key-chat_footer [data-testid="stChatInputSubmitButton"] {
             width: 36px !important;
             min-width: 36px !important;
-            max-width: 36px !important;
             height: 36px !important;
-            min-height: 36px !important;
             padding: 0 !important;
             border: 0 !important;
             border-radius: 10px !important;
@@ -1789,21 +1720,10 @@ def _render_styles() -> None:
             color: #5A77A9 !important;
             box-shadow: none !important;
         }
-        .st-key-chat_footer [data-testid="stForm"] button [data-testid="stMarkdownContainer"] p {
-            position: absolute !important;
-            width: 1px !important;
-            height: 1px !important;
-            padding: 0 !important;
-            margin: -1px !important;
-            overflow: hidden !important;
-            clip: rect(0, 0, 0, 0) !important;
-            white-space: nowrap !important;
-            border: 0 !important;
-        }
-        .st-key-chat_footer .chat-reset-note { margin-top: 13px; color: #77859A; font-size: 11px; line-height: 1.35; text-align: center; }
-        .st-key-chat_footer [data-testid="stForm"] button:disabled { opacity: .52; }
+        .st-key-chat_footer [data-testid="stChatInput"]:has(textarea:disabled) [data-testid="stChatInputSubmitButton"] { opacity: .52; }
         .st-key-chat_panel [data-testid="stButton"] button:focus-visible,
-        .st-key-chat_footer [data-testid="stTextInput"] input:focus-visible {
+        .st-key-chat_footer [data-testid="stChatInputTextArea"]:focus-visible,
+        .st-key-chat_footer [data-testid="stChatInputSubmitButton"]:focus-visible {
             outline: 2px solid #8D9EB5 !important;
             outline-offset: 2px;
         }

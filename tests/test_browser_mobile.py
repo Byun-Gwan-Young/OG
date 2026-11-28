@@ -44,6 +44,7 @@ def _password(employee_id: str) -> str:
 @pytest.fixture(scope="module")
 def app_url(tmp_path_factory):
     env = browser_env(tmp_path_factory.mktemp("mobile") / "mobile.db")
+    env["LLM_BASE_URL"] = " "  # 로컬 .env에 주소가 있어도 외부 LLM을 호출하지 않는다.
     subprocess.run([sys.executable, "-c", PREPARE, str(ROOT), CODE], env=env, cwd=ROOT, check=True, capture_output=True)
     with running_app(env) as url:
         yield url
@@ -75,6 +76,67 @@ def _tab(page, label: str):
 def _overlap(a: dict, b: dict) -> bool:
     return not (a["x"] + a["width"] <= b["x"] or b["x"] + b["width"] <= a["x"]
                 or a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"])
+
+
+@pytest.mark.parametrize("viewport", [MOBILE, {"width": 1440, "height": 900}])
+def test_chat_composer_alignment_and_wrapping(app_url, browser, viewport):
+    with browser.new_context(viewport=viewport) as context:
+        page = _login(context, app_url)
+        page.locator(".st-key-chat_fab button").click()
+        composer = page.get_by_test_id("stChatInput")
+        field = composer.get_by_test_id("stChatInputTextArea")
+        send = composer.get_by_test_id("stChatInputSubmitButton")
+        counter = composer.get_by_test_id("InputInstructions")
+        field.wait_for()
+
+        def check_alignment():
+            outer = composer.bounding_box()
+            text = field.bounding_box()
+            button = send.bounding_box()
+            count = counter.bounding_box()
+            center = outer["y"] + outer["height"] / 2
+            assert text["y"] + text["height"] / 2 == pytest.approx(center, abs=1)
+            assert button["y"] + button["height"] / 2 == pytest.approx(center, abs=1)
+            assert text["x"] + text["width"] <= button["x"]
+            assert count["x"] + count["width"] == pytest.approx(outer["x"] + outer["width"], abs=1)
+            assert count["y"] - (outer["y"] + outer["height"]) == pytest.approx(2, abs=1)
+            return text["height"]
+
+        counter.wait_for()
+        assert counter.evaluate("(el) => getComputedStyle(el, '::after').content") == '"0/500"'
+        assert field.evaluate("(el) => getComputedStyle(el).textAlign") == "left"
+        single_line_height = check_alignment()
+
+        field.fill("한 줄")
+        playwright_sync.expect(counter).to_have_text("3/500")
+        assert check_alignment() == pytest.approx(single_line_height, abs=1)
+
+        field.press("End")
+        field.press("Shift+Enter")
+        field.press_sequentially("next")
+        playwright_sync.expect(field).to_have_value("한 줄\nnext")
+        playwright_sync.expect(counter).to_have_text("8/500")
+        assert check_alignment() > single_line_height
+
+        field.fill("가" * 500)
+        field.press("End")
+        field.press("a")
+        playwright_sync.expect(counter).to_have_text("500/500")
+        playwright_sync.expect(field).to_have_value("가" * 500)
+        assert field.evaluate("(el) => el.scrollHeight > el.clientHeight")
+        assert field.evaluate("(el) => { el.scrollTop = el.scrollHeight; return el.scrollTop }") > 0
+        check_alignment()
+
+        field.fill("키보드 전송 확인")
+        field.press("Enter")
+        page.locator(".st-key-chat_scroll").get_by_text("키보드 전송 확인", exact=True).wait_for()
+        playwright_sync.expect(field).to_have_value("")
+        playwright_sync.expect(field).to_be_enabled(timeout=30_000)
+
+        field.fill("버튼 전송 확인")
+        send.click()
+        page.locator(".st-key-chat_scroll").get_by_text("버튼 전송 확인", exact=True).wait_for()
+        playwright_sync.expect(field).to_have_value("")
 
 
 def test_mobile_tabs_equipment_request_and_reload(app_url, browser):
