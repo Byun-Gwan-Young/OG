@@ -7,7 +7,7 @@
 "점심 식대 한도랑 내 남은 연차 며칠이야?" 한 문장이면 사내 규정, 내 인사 정보, 사무실 위치, 인수인계서, 비품 신청까지 끝.<br>
 **회사 등록 → 데이터 업로드 → 사원에게 회사 코드 전달**, 이 세 단계면 코드 수정 없이 바로 씁니다.
 
-[**🌐 웹 서비스**](https://officegenie-web.duckdns.org) · [**🤖 MCP 서버**](https://officegenie-mcp.duckdns.org) · [직원 가이드](docs/guide-employee.md) · [관리자 가이드](docs/guide-admin.md)
+[**🌐 웹 서비스**](https://officegenie-web.duckdns.org) · [**🤖 MCP 서버**](https://officegenie-mcp.duckdns.org) · [**📽 발표자료**](https://byun-gwan-young.github.io/OG/) · [직원 가이드](docs/guide-employee.md) · [관리자 가이드](docs/guide-admin.md)
 
 ![Python](https://img.shields.io/badge/Python-3.15-3776AB?logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.67-FF4B4B?logo=streamlit&logoColor=white)
@@ -15,7 +15,7 @@
 ![PostgreSQL](https://img.shields.io/badge/DB-Neon%20PostgreSQL-00E599?logo=postgresql&logoColor=white)
 ![AWS](https://img.shields.io/badge/Deploy-AWS%20EC2%20Seoul-FF9900?logo=amazonaws&logoColor=white)
 ![PWA](https://img.shields.io/badge/PWA-installable-5A0FC8?logo=pwa&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-292%20passed-2EA043)
+![Tests](https://img.shields.io/badge/tests-294%20passed-2EA043)
 
 <img src="docs/images/ui-review/after/pc-home.png" alt="오피스지니 사원 홈(사원증)" width="860">
 
@@ -129,7 +129,7 @@ EC2 생성, 보안 그룹, 도메인, 비용 정리까지 [관리자 가이드 �
 pytest -q --durations=10     # LLM·공유 DB 없이 실행, 원본 data/를 건드리지 않음
 ```
 
-MCP 툴 권한, 로그인 잠금, 관리자 업로드, PWA 주입, 실제 브라우저 로그인 · 앱 설치 · 아이콘 표시, 배포 설정까지 **292개 테스트**가 통과합니다. PostgreSQL 전용 테스트는 `TEST_DATABASE_URL`을 넣고 `--pg-all`로 돌립니다.
+MCP 툴 권한, 로그인 잠금, 관리자 업로드, PWA 주입, 실제 브라우저 로그인 · 앱 설치 · 아이콘 표시, 배포 설정까지 **294개 테스트**가 통과합니다. PostgreSQL 전용 테스트는 `TEST_DATABASE_URL`을 넣고 `--pg-all`로 돌립니다.
 
 ## 📚 문서
 

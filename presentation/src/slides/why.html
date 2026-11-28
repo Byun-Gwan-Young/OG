@@ -1,0 +1,17 @@
+<section id="why" data-transition="fade">
+<p class="eyebrow">선택 이유와 검증 과정</p>
+<h2>막힐 때마다 검증하고, 더 나은 선택으로 바꿨습니다</h2>
+<table class="rise d1">
+<tr><th style="width:420px">선택</th><th style="width:560px">이유</th><th>검증</th></tr>
+<tr><td><b>MCP 서버</b>로 기능 분리</td><td class="how">웹과 AI 앱이 같은 규칙을 쓰도록</td><td class="how">웹과 Claude Code에서 같은 답, 같은 차단</td></tr>
+<tr><td><b>서버</b>에서 권한 검사</td><td class="how">프롬프트만으로는 우회될 수 있음</td><td class="how">타인 정보 요청 테스트 전부 차단</td></tr>
+<tr><td>JSON → <b>클라우드 DB</b></td><td class="how">여러 회사 · 동시 신청을 저장해야 함</td><td class="how">팀원 4명이 같은 DB로 동시 사용</td></tr>
+<tr><td>무료 호스팅 → <b>AWS 서울</b></td><td class="how">해외 무료 서버가 너무 느림</td><td class="how">서울 리전 이전 후 실제 접속으로 확인</td></tr>
+<tr><td><b>PWA</b> 앱</td><td class="how">앱스토어 심사 없이 바로 설치 · 업데이트</td><td class="how">설치 버튼 · 아이폰 안내 브라우저 테스트</td></tr>
+</table>
+<aside>기술은 처음부터 다 정하지 않고, 문제가 생길 때마다 검증하고 바꿨습니다.
+
+처음에는 회사 데이터를 JSON 파일로 두고 MCP 툴부터 만들었습니다. 기능을 MCP로 분리해 두어서, 나중에 웹과 AI 앱 두 입구가 같은 규칙을 쓸 수 있었습니다. 권한 검사는 프롬프트에 맡기면 우회될 수 있어서 처음부터 서버에서 했습니다.
+
+여러 회사가 쓰고 신청이 동시에 들어오니 파일로는 한계가 있어서, Neon PostgreSQL 클라우드 DB로 옮겼습니다. 배포는 처음에 무료 해외 호스팅을 썼는데 너무 느려서 AWS 서울 리전 EC2로 옮겼습니다. 배포 직후 아이콘이 글자로 보이는 문제가 있었는데, 원인이 HTTP/3 설정이라는 걸 찾아서 고쳤고, 이것도 자동 테스트에 넣었습니다. 모바일은 앱스토어 심사 없이 바로 설치할 수 있는 PWA를 골랐습니다.</aside>
+</section>
