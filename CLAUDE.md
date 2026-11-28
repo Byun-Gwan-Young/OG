@@ -67,3 +67,4 @@
 - 기본 주소는 `LLM_BASE_URL`, 모델은 `jitda-chat`을 사용한다.
 - OpenAI-compatible `/chat/completions`의 도구 호출과 응답 형식을 유지한다.
 - FunctionResponse에는 id와 name을 모두 넣는다.
+
